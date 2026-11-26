@@ -10,6 +10,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | filter | Exact-match filter; CSV or string Parquet | Linux fixture-tested |
 | sort | Stable ascending text sort by one column | Linux fixture-tested |
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
+| mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |

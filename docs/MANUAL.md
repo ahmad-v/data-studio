@@ -8,6 +8,7 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `filter`: Exact-match filter; CSV or string Parquet.
 - `sort`: Enter the exact column name. Rows with equal values retain their order. Values sort as text, so `10` precedes `2`.
 - `deduplicate`: Keep the first occurrence of each full row. Leave the parameter blank. Both operations can preview rows or export to a new CSV, TSV or Parquet file.
+- `mask-column`: Enter the exact column name to replace its nonempty values with `[MASKED]`. Preview the result or export a new CSV, TSV or Parquet file. Review other columns and blank patterns before sharing masked data.
 - `summary`: Numeric column n, missing, mean, sample SD, min/max.
 - `export`: CSV formula guard; Parquet UTF-8 columns.
 - `linear-regression`: Enter exact predictor and response column names separated by a comma. The preview reports the least-squares intercept, slope, R² and complete and excluded pair counts. It uses finite numeric complete pairs. A constant response yields an undefined R². Inferential statistics are outside this route.

@@ -47,6 +47,13 @@
       "fixture_status": "Linux x86_64 fixtures passed"
     },
     {
+      "operation": "mask-column",
+      "description": "Replace nonempty cells in a selected column",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 source preservation and TSV export fixtures passed"
+    },
+    {
       "operation": "summary",
       "description": "Numeric column n, missing, mean, sample SD, min/max",
       "status": "implemented-unverified",

@@ -14,6 +14,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Optional new CSV or Parquet output."},
  Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Stable ascending text order. Optional CSV, TSV or Parquet output."},
  Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
+ Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
@@ -488,6 +489,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         .then_some(r.parameter.as_str());
     let mut t = load(&r.input, sheet, &j)?;
     let mut written = None;
+    let mut warnings = vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()];
     let preview = match r.operation.as_str() {
         "counts" => value_counts(&t, column(&t, &r.parameter)?, &j)?,
         "summary" => summary(&t, column(&t, &r.parameter)?, &j)?,
@@ -529,7 +531,8 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 points.len()
             )
         }
-        "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate" => {
+        "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate"
+        | "mask-column" => {
             match r.operation.as_str() {
                 "select-columns" => t = select_columns(t, &r.parameter, &j)?,
                 "filter" => {
@@ -545,6 +548,16 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                     j.check()?;
                     t.rows.sort_by(|a, b| a[index].cmp(&b[index]));
                     j.check()?;
+                }
+                "mask-column" => {
+                    let index = column(&t, &r.parameter)?;
+                    for row in &mut t.rows {
+                        j.check()?;
+                        if !row[index].is_empty() {
+                            row[index] = "[MASKED]".into();
+                        }
+                    }
+                    warnings.push("Only the selected column's nonempty text cells were masked. Headers, blank patterns and other columns can still identify people or reveal sensitive information.".into());
                 }
                 "deduplicate" => t.rows = deduplicate(t.rows, &j)?,
                 _ => {}
@@ -563,7 +576,12 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         }
         _ => return Err(Error::input("Unknown operation")),
     };
-    Ok(Outcome{preview,written,warnings:vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()],..Outcome::default()})
+    Ok(Outcome {
+        preview,
+        written,
+        warnings,
+        ..Outcome::default()
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -623,6 +641,34 @@ mod tests {
         assert_eq!(reordered.headers, ["two", "one"]);
         assert_eq!(reordered.rows[0], ["y", "x"]);
         assert!(select_columns(reordered, "two,two", &Job::new()).is_err());
+    }
+
+    #[test]
+    fn masks_only_nonempty_values_of_the_selected_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let output = dir.path().join("masked.csv");
+        let original = "name,category\nAda,A\n,B\n ,C\n";
+        std::fs::write(&input, original).unwrap();
+        let request = Request {
+            operation: "mask-column".into(),
+            input: input.clone(),
+            output: output.clone(),
+            parameter: "name".into(),
+            ..Request::default()
+        };
+        let result = handle(request.clone(), Job::new()).unwrap();
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("blank patterns")));
+        assert!(!result.preview.contains("Ada"));
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "name,category\n[MASKED],A\n,B\n[MASKED],C\n"
+        );
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        assert!(handle(request, Job::new()).is_err());
     }
 
     #[test]
