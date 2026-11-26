@@ -9,13 +9,13 @@ use parquet::{
 };
 use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
- Operation{id:"preview",label:"Preview",hint:"Preview CSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
- Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv or .parquet output."},
+ Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
+ Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv, .tsv or .parquet output."},
  Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Optional new CSV or Parquet output."},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
- Operation{id:"export",label:"Export",hint:"Export to .csv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
+ Operation{id:"export",label:"Export",hint:"Export to .csv, .tsv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
 struct Table {
     headers: Vec<String>,
@@ -148,8 +148,11 @@ fn load(p: &Path, sheet: Option<&str>, j: &Job) -> Result<Table> {
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("csv") => {
-            let mut r = csv::Reader::from_reader(bytes.as_slice());
+        Some(kind @ ("csv" | "tsv")) => {
+            let delimiter = if kind == "tsv" { b'\t' } else { b',' };
+            let mut r = csv::ReaderBuilder::new()
+                .delimiter(delimiter)
+                .from_reader(bytes.as_slice());
             let headers = r
                 .headers()
                 .map_err(err)?
@@ -214,7 +217,7 @@ fn load(p: &Path, sheet: Option<&str>, j: &Job) -> Result<Table> {
             validate(headers, records)
         }
         Some("parquet") => load_parquet(bytes, j),
-        _ => Err(Error::input("Expected CSV, XLSX or Parquet")),
+        _ => Err(Error::input("Expected CSV, TSV, XLSX or Parquet")),
     }
 }
 fn column(t: &Table, name: &str) -> Result<usize> {
@@ -314,8 +317,11 @@ fn safe(s: &str) -> String {
 }
 fn export(t: &Table, p: &Path, j: &Job) -> Result<()> {
     match p.extension().and_then(|s| s.to_str()) {
-        Some("csv") => write_new(p, |f| {
-            let mut w = csv::Writer::from_writer(f);
+        Some(kind @ ("csv" | "tsv")) => write_new(p, |f| {
+            let delimiter = if kind == "tsv" { b'\t' } else { b',' };
+            let mut w = csv::WriterBuilder::new()
+                .delimiter(delimiter)
+                .from_writer(f);
             w.write_record(t.headers.iter().map(|s| safe(s)))
                 .map_err(err)?;
             for row in &t.rows {
@@ -347,7 +353,7 @@ fn export(t: &Table, p: &Path, j: &Job) -> Result<()> {
             writer.close().map_err(err)?;
             Ok(())
         }),
-        _ => Err(Error::input("Output must be .csv or .parquet")),
+        _ => Err(Error::input("Output must be .csv, .tsv or .parquet")),
     }
 }
 pub fn handle(r: Request, j: Job) -> Result<Outcome> {
@@ -415,7 +421,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         }
         _ => return Err(Error::input("Unknown operation")),
     };
-    Ok(Outcome{preview,written,warnings:vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. CSV export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()],..Outcome::default()})
+    Ok(Outcome{preview,written,warnings:vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()],..Outcome::default()})
 }
 #[cfg(test)]
 mod tests {
@@ -475,6 +481,21 @@ mod tests {
         assert_eq!(reordered.headers, ["two", "one"]);
         assert_eq!(reordered.rows[0], ["y", "x"]);
         assert!(select_columns(reordered, "two,two", &Job::new()).is_err());
+    }
+
+    #[test]
+    fn tsv_preserves_quoted_tabs_and_unicode() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("source.tsv");
+        let output = dir.path().join("copy.tsv");
+        std::fs::write(&input, "name\tvalue\nCafé\t\"a\tb\"\n").unwrap();
+        let table = load(&input, None, &Job::new()).unwrap();
+        assert_eq!(table.headers, ["name", "value"]);
+        assert_eq!(table.rows[0], ["Café", "a\tb"]);
+        export(&table, &output, &Job::new()).unwrap();
+        let imported = load(&output, None, &Job::new()).unwrap();
+        assert_eq!(imported.headers, table.headers);
+        assert_eq!(imported.rows, table.rows);
     }
 
     #[test]

@@ -6,7 +6,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 |---|---|---|
 | select-columns | Select and reorder table columns | implemented-unverified |
 | counts | Exact value counts for a column | implemented-unverified |
-| preview | CSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview | Linux fixture-tested |
+| preview | CSV, TSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview | TSV pending compilation |
 | filter | Exact-match filter; CSV or string Parquet | Linux fixture-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |
