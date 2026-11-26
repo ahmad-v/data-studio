@@ -54,6 +54,13 @@
       "fixture_status": "Linux x86_64 source preservation and TSV export fixtures passed"
     },
     {
+      "operation": "inner-join",
+      "description": "Exact nonblank key inner join between two local tables",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux fixtures and mixed CSV/TSV Unicode CLI output verified"
+    },
+    {
       "operation": "run-project",
       "description": "Replay an ordered version 1 data project against a local table",
       "status": "implemented-unverified",

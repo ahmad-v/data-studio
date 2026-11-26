@@ -41,3 +41,7 @@ Create a UTF-8 JSON file with schema version 1 and up to 32 ordered steps. The e
 ```
 
 Use `mask-column` with a `column` field to include a fixed mask step. The optional top-level `worksheet` selects an exact XLSX sheet name. Set the table as Input and the project path as Parameter, or use `--cli run-project input.csv result.tsv project.json`. An empty output path previews the result. An invalid step reports its number and leaves the output absent. Keep project files local if filter values contain sensitive information. The project engine interprets only these operations and uses the same bounded text-table loader as individual routes.
+
+## Join two tables
+
+Choose `inner-join` with the left table as Input. The operation parameter is JSON, for example `{"right_path":"lookup.tsv","left_key":"id","right_key":"code"}`. Keys are exact nonempty text. Unmatched and blank keys are omitted. Duplicate keys produce every matching pair in input order. The right key column is omitted and other columns from the right table use the `right.` prefix. Name collisions, more than 256 columns or 500,000 cells and joined text over 32 MiB cause the operation to fail before saving. Use a new CSV, TSV or Parquet output or leave it blank to preview. XLSX joins use the first sheet.

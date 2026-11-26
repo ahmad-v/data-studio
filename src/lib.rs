@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod join;
 mod project;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
@@ -17,6 +18,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Stable ascending text order. Optional CSV, TSV or Parquet output."},
  Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
  Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
+ Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Exact nonblank text keys. Optional new CSV, TSV or Parquet output."#},
  Operation{id:"run-project",label:"Run data project",hint:"Enter the project JSON path. Preview a local table or write it to a new CSV, TSV or Parquet file."},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
@@ -626,7 +628,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             )
         }
         "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate"
-        | "mask-column" | "run-project" => {
+        | "mask-column" | "run-project" | "inner-join" => {
             if let Some(project) = project {
                 let (result, steps, masked) = project.run(t, &j)?;
                 t = result;
@@ -634,6 +636,9 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 if masked {
                     warnings.push(MASK_WARNING.into());
                 }
+            } else if r.operation == "inner-join" {
+                t = join::inner(t, &r.parameter, &j)?;
+                warnings.push("Inner join uses exact text keys. Blank and unmatched keys are excluded. Matching duplicate keys produce every matching pair.".into());
             } else if let Some(step) = request_step(&r.operation, &r.parameter)? {
                 if matches!(step, Step::MaskColumn { .. }) {
                     warnings.push(MASK_WARNING.into());
@@ -719,6 +724,32 @@ mod tests {
         assert_eq!(reordered.headers, ["two", "one"]);
         assert_eq!(reordered.rows[0], ["y", "x"]);
         assert!(select_columns(reordered, ["two", "two"], &Job::new()).is_err());
+    }
+
+    #[test]
+    fn inner_join_preserves_match_order_and_excludes_blank_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let left = dir.path().join("left.csv");
+        let right = dir.path().join("right.tsv");
+        let output = dir.path().join("joined.csv");
+        std::fs::write(&left, "key,name\na,First\nb,Second\n,Blank\na,Third\n").unwrap();
+        std::fs::write(&right, "id\tname\na\tOne\na\tTwo\n\tBlank\n").unwrap();
+        let request = Request {
+            operation: "inner-join".into(),
+            input: left,
+            output: output.clone(),
+            parameter: serde_json::json!({
+                "right_path": right, "left_key": "key", "right_key": "id"
+            })
+            .to_string(),
+            ..Request::default()
+        };
+        handle(request.clone(), Job::new()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "key,name,right.name\na,First,One\na,First,Two\na,Third,One\na,Third,Two\n"
+        );
+        assert!(handle(request, Job::new()).is_err());
     }
 
     #[test]
