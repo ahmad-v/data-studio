@@ -53,3 +53,11 @@ Use `group-summary` with `group-column,value-column`. One row per exact group ap
 Choose `select-sql` and enter one SQLite SELECT. The imported table is named `input`. For example, `SELECT category, SUM(CAST(amount AS REAL)) AS total FROM input GROUP BY category ORDER BY category`. Wrap column names with spaces in double quotes. The table starts with text columns, so use explicit casts and review invalid numeric text before casting. NULL results are exported as empty text and BLOB results are rejected. Result names must be unique.
 
 The bundled engine uses an in-memory database and limits statement size, output cells and execution work. It permits SELECT and a limited list of text and numeric functions. The route refuses database attachment, extensions, PRAGMAs, writes and multiple statements. Use a new CSV, TSV or Parquet output or leave it blank to preview.
+
+## Additional operations
+
+- `drop-missing`. Enter the exact column name to remove rows whose selected cell is empty or contains only whitespace.
+- `fill-missing`. Enter `column=value` to replace empty and whitespace-only cells with literal text.
+- `rename-column`. Enter `old=new`. The new name must contain text and be unique.
+
+All three operations can be used in a project. Use a `column` field and, where applicable, `value` for fill or `name` for rename.

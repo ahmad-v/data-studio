@@ -20,6 +20,9 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
  Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
  Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Exact nonblank text keys. Optional new CSV, TSV or Parquet output."#},
+ Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
+ Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
+ Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank."},
  Operation{id:"run-project",label:"Run data project",hint:"Enter the project JSON path. Preview a local table or write it to a new CSV, TSV or Parquet file."},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
@@ -312,6 +315,58 @@ fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
             job.check()?;
         }
         Step::Deduplicate {} => table.rows = deduplicate(table.rows, job)?,
+        Step::DropMissing { column: name } => {
+            let index = column(&table, &name)?;
+            let mut kept = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if !row[index].trim().is_empty() {
+                    kept.push(row);
+                }
+            }
+            table.rows = kept;
+        }
+        Step::FillMissing {
+            column: name,
+            value,
+        } => {
+            let index = column(&table, &name)?;
+            if value.trim().is_empty() {
+                return Err(Error::input(
+                    "Replacement value must contain non-whitespace text",
+                ));
+            }
+            let current_bytes = table.rows.iter().flatten().map(String::len).sum::<usize>();
+            let mut total_bytes = current_bytes;
+            for row in &mut table.rows {
+                job.check()?;
+                if row[index].trim().is_empty() {
+                    total_bytes = total_bytes - row[index].len() + value.len();
+                    if total_bytes > 32 * 1024 * 1024 {
+                        return Err(Error::new(
+                            ErrorKind::Limit,
+                            "Filled table exceeds 32 MiB of cell text",
+                        ));
+                    }
+                    row[index].clone_from(&value);
+                }
+            }
+        }
+        Step::RenameColumn { column: old, name } => {
+            let index = column(&table, &old)?;
+            if name.trim().is_empty() {
+                return Err(Error::input("Column name must contain non-whitespace text"));
+            }
+            if table
+                .headers
+                .iter()
+                .enumerate()
+                .any(|(position, existing)| position != index && *existing == name)
+            {
+                return Err(Error::input("A column with this name already exists"));
+            }
+            table.headers[index] = name;
+        }
         Step::MaskColumn { column: name } => {
             let index = column(&table, &name)?;
             for row in &mut table.rows {
@@ -343,6 +398,25 @@ fn request_step(operation: &str, parameter: &str) -> Result<Option<Step>> {
             column: parameter.into(),
         },
         "deduplicate" => Step::Deduplicate {},
+        "drop-missing" => Step::DropMissing {
+            column: parameter.into(),
+        },
+        "fill-missing" | "rename-column" => {
+            let (column, value) = parameter
+                .split_once('=')
+                .ok_or_else(|| Error::input("Expected column=value"))?;
+            if operation == "fill-missing" {
+                Step::FillMissing {
+                    column: column.into(),
+                    value: value.into(),
+                }
+            } else {
+                Step::RenameColumn {
+                    column: column.into(),
+                    name: value.into(),
+                }
+            }
+        }
         "mask-column" => Step::MaskColumn {
             column: parameter.into(),
         },
@@ -696,7 +770,8 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             )
         }
         "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate"
-        | "mask-column" | "run-project" | "inner-join" | "group-summary" | "select-sql" => {
+        | "mask-column" | "run-project" | "inner-join" | "group-summary" | "select-sql"
+        | "drop-missing" | "fill-missing" | "rename-column" => {
             if let Some(project) = project {
                 let (result, steps, masked) = project.run(t, &j)?;
                 t = result;

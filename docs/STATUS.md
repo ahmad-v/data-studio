@@ -4,6 +4,9 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 
 | Operation | Scope | Status |
 |---|---|---|
+| drop-missing | Drop rows missing a selected value | Linux fixture-tested |
+| fill-missing | Fill blanks in a selected column | Linux fixture-tested |
+| rename-column | Rename a table header | Linux fixture-tested |
 | select-columns | Select and reorder table columns | Linux fixture-tested |
 | counts | Exact value counts for a column | Linux fixture-tested |
 | preview | CSV, TSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview | Linux fixture-tested |

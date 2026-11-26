@@ -4,6 +4,9 @@ Nothing is verified on a native target. The machine-readable registry is a devel
 
 | Operation | Route | Evidence status |
 |---|---|---|
+| drop-missing | Drop rows missing a selected value | Linux fixture-tested |
+| fill-missing | Fill blanks in a selected column | Linux fixture-tested |
+| rename-column | Rename a table header | Linux fixture-tested |
 | preview | CSV / first XLSX sheet text preview | implemented-unverified |
 | filter | Exact-match filter; CSV or string Parquet | implemented-unverified |
 | sort | Stable ascending text sort by one column | Linux fixture-tested |

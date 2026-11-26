@@ -19,6 +19,9 @@ pub enum Step {
     Sort { column: String },
     Deduplicate {},
     MaskColumn { column: String },
+    DropMissing { column: String },
+    FillMissing { column: String, value: String },
+    RenameColumn { column: String, name: String },
 }
 
 impl Project {

@@ -5,6 +5,27 @@
   "verified_capabilities": [],
   "development_routes": [
     {
+      "operation": "drop-missing",
+      "description": "Drop rows missing a selected value",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux integration fixture passed"
+    },
+    {
+      "operation": "fill-missing",
+      "description": "Fill blanks in a selected column",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux integration fixture passed"
+    },
+    {
+      "operation": "rename-column",
+      "description": "Rename a table header",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux integration fixture passed"
+    },
+    {
       "operation": "select-columns",
       "description": "Select and reorder table columns",
       "status": "implemented-unverified",
