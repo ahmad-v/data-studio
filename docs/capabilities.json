@@ -68,6 +68,13 @@
       "fixture_status": "Linux x86_64 replay, CLI export and failed-step isolation passed"
     },
     {
+      "operation": "select-sql",
+      "description": "Bounded read-only SQLite SELECT over one local input",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "SQL result comparison and authorization fixtures passed"
+    },
+    {
       "operation": "group-summary",
       "description": "Grouped finite numeric descriptive statistics",
       "status": "implemented-unverified",

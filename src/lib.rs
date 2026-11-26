@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 mod join;
 mod project;
+mod sql;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx};
@@ -21,6 +22,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Exact nonblank text keys. Optional new CSV, TSV or Parquet output."#},
  Operation{id:"run-project",label:"Run data project",hint:"Enter the project JSON path. Preview a local table or write it to a new CSV, TSV or Parquet file."},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
+ Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
@@ -694,7 +696,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             )
         }
         "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate"
-        | "mask-column" | "run-project" | "inner-join" | "group-summary" => {
+        | "mask-column" | "run-project" | "inner-join" | "group-summary" | "select-sql" => {
             if let Some(project) = project {
                 let (result, steps, masked) = project.run(t, &j)?;
                 t = result;
@@ -702,6 +704,9 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 if masked {
                     warnings.push(MASK_WARNING.into());
                 }
+            } else if r.operation == "select-sql" {
+                t = sql::query(t, &r.parameter, &j)?;
+                warnings.push("The local SQLite input table contains text. Use explicit casts for numeric work. NULL results become blank cells.".into());
             } else if r.operation == "group-summary" {
                 let (group, value) = column_pair(&t, &r.parameter)?;
                 t = grouped_summary(&t, group, value, &j)?;
@@ -794,6 +799,42 @@ mod tests {
         assert_eq!(reordered.headers, ["two", "one"]);
         assert_eq!(reordered.rows[0], ["y", "x"]);
         assert!(select_columns(reordered, ["two", "two"], &Job::new()).is_err());
+    }
+
+    #[test]
+    fn select_sql_queries_the_table_and_denies_other_capabilities() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let output = dir.path().join("out.csv");
+        std::fs::write(&input, "group,value\nA,2\nA,3\nB,4\n").unwrap();
+        let request = |statement: &str| Request {
+            operation: "select-sql".into(),
+            parameter: statement.into(),
+            input: input.clone(),
+            output: output.clone(),
+            ..Request::default()
+        };
+        for invalid in [
+            "ATTACH DATABASE 'other.db' AS other",
+            "DELETE FROM input",
+            "SELECT * FROM sqlite_schema",
+            "PRAGMA table_info(input)",
+            "SELECT load_extension('forbidden')",
+            "SELECT count(*) FROM input; SELECT 2",
+            "SELECT random()",
+            "SELECT X'00' AS binary",
+        ] {
+            assert!(handle(request(invalid), Job::new()).is_err(), "{invalid}");
+            assert!(!output.exists());
+        }
+        handle(
+            request("SELECT \"group\", SUM(CAST(value AS INTEGER)) AS total FROM input GROUP BY \"group\" ORDER BY \"group\""),
+            Job::new(),
+        ).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(output).unwrap(),
+            "group,total\nA,5\nB,4\n"
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
 | inner-join | Exact nonblank key inner join with bounded result | Linux fixture and CLI-tested |
 | run-project | Replay declared table transformations from a versioned project | Linux fixture and CLI-tested |
+| select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |

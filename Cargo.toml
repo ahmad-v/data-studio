@@ -2,7 +2,7 @@
 name = "data-studio"
 version = "0.1.0-alpha.1"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Local tabular data workbench"
 license = "MIT OR Apache-2.0"
 publish = false
@@ -19,6 +19,7 @@ arrow-array = "=57.3.3"
 arrow-schema = "=57.3.3"
 parquet = { version = "=57.3.3", default-features = false, features = ["arrow"] }
 bytes = "=1.12.2"
+rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled", "hooks", "limits"] }
 
 
 [features]
