@@ -1,0 +1,7 @@
+<!-- Candidate only; verify WiX Burn native ARM64 and x64 and reviewed extension version. Not built. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="Data Studio" Manufacturer="Development snapshot" Version="0.1.0.0" UpgradeCode="eb5289f8-d61a-5d22-b0c8-47ca060abaf5">
+    <BootstrapperApplication><bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl="" /></BootstrapperApplication>
+    <Chain><MsiPackage SourceFile="$(var.MsiPath)" Compressed="yes" /></Chain>
+  </Bundle>
+</Wix>

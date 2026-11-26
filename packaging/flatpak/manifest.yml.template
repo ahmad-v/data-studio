@@ -1,0 +1,24 @@
+# Template only. Pin reviewed runtime/SDK commits, Rust extension and cargo vendor sources before build.
+app-id: org.localwright.DataStudio
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: data-studio
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+modules:
+  - name: data-studio
+    buildsystem: simple
+    build-commands:
+      - cargo build --offline --locked --release
+      - install -Dm755 target/release/data-studio /app/bin/data-studio
+      - install -Dm644 packaging/linux/org.localwright.DataStudio.desktop /app/share/applications/org.localwright.DataStudio.desktop
+      - install -Dm644 packaging/linux/org.localwright.DataStudio.metainfo.xml /app/share/metainfo/org.localwright.DataStudio.metainfo.xml
+      - install -Dm644 packaging/linux/org.localwright.DataStudio.svg /app/share/icons/hicolor/scalable/apps/org.localwright.DataStudio.svg
+    sources: [] # Replace with exact source commits and verified vendor manifest; do not enable build network.

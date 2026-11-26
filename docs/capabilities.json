@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "project": "data-studio",
+  "version": "0.1.0-alpha.1",
+  "verified_capabilities": [],
+  "development_routes": [
+    {
+      "operation": "preview",
+      "description": "CSV / first XLSX sheet text preview",
+      "status": "implemented-unverified",
+      "targets": [],
+      "fixture_status": "not run"
+    },
+    {
+      "operation": "filter",
+      "description": "Exact-match filter; CSV or string Parquet",
+      "status": "implemented-unverified",
+      "targets": [],
+      "fixture_status": "not run"
+    },
+    {
+      "operation": "summary",
+      "description": "Numeric column n, missing, mean, sample SD, min/max",
+      "status": "implemented-unverified",
+      "targets": [],
+      "fixture_status": "not run"
+    },
+    {
+      "operation": "export",
+      "description": "CSV formula guard; Parquet UTF-8 columns",
+      "status": "implemented-unverified",
+      "targets": [],
+      "fixture_status": "not run"
+    },
+    {
+      "operation": "scatter",
+      "description": "Monochrome scatter SVG, 800 x 600",
+      "status": "implemented-unverified",
+      "targets": [],
+      "fixture_status": "not run"
+    }
+  ]
+}

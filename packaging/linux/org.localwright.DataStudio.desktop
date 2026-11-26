@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Data Studio
+Exec=data-studio
+Icon=org.localwright.DataStudio
+Terminal=false
+Categories=Utility;
