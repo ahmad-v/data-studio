@@ -6,8 +6,11 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `counts`: Counts exact cell values, including blank text. The preview reports the 30 most frequent values and the total number of distinct values.
 - `preview`: Preview CSV, XLSX or Parquet as text. For XLSX preview and export, enter the exact worksheet name or leave the parameter blank to use the first sheet.
 - `filter`: Exact-match filter; CSV or string Parquet.
+- `sort`: Enter the exact column name. Rows with equal values retain their order. Values sort as text, so `10` precedes `2`.
+- `deduplicate`: Keep the first occurrence of each full row. Leave the parameter blank. Both operations can preview rows or export to a new CSV, TSV or Parquet file.
 - `summary`: Numeric column n, missing, mean, sample SD, min/max.
 - `export`: CSV formula guard; Parquet UTF-8 columns.
+- `correlation`: Enter two exact column names separated by a comma. The preview reports Pearson's r and the complete and excluded pair counts. Blank pairs are excluded. Both columns must vary, and every complete pair must be finite numeric data.
 - `scatter`: Monochrome scatter SVG, 800 x 600.
 
 Limitations: In-memory text table only; no inferred types, large-data virtualization, formulas, rich statistics, project pipelines, other formats, authoritative palettes or full scientific export. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.

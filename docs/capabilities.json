@@ -33,6 +33,20 @@
       "fixture_status": "not run"
     },
     {
+      "operation": "sort",
+      "description": "Stable ascending text sort by one column",
+      "status": "implemented-unverified",
+      "targets": [],
+      "fixture_status": "pending compilation"
+    },
+    {
+      "operation": "deduplicate",
+      "description": "Keep the first occurrence of each exact row",
+      "status": "implemented-unverified",
+      "targets": [],
+      "fixture_status": "pending compilation"
+    },
+    {
       "operation": "summary",
       "description": "Numeric column n, missing, mean, sample SD, min/max",
       "status": "implemented-unverified",
@@ -45,6 +59,13 @@
       "status": "implemented-unverified",
       "targets": [],
       "fixture_status": "not run"
+    },
+    {
+      "operation": "correlation",
+      "description": "Pearson coefficient on complete numeric pairs",
+      "status": "implemented-unverified",
+      "targets": [],
+      "fixture_status": "pending compilation"
     },
     {
       "operation": "scatter",

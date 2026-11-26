@@ -8,8 +8,11 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | counts | Exact value counts for a column | implemented-unverified |
 | preview | CSV, TSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview | TSV pending compilation |
 | filter | Exact-match filter; CSV or string Parquet | Linux fixture-tested |
+| sort | Stable ascending text sort by one column | implemented-unverified |
+| deduplicate | Keep the first occurrence of each exact row | implemented-unverified |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |
+| correlation | Pearson coefficient on complete numeric pairs | implemented-unverified |
 | scatter | Monochrome scatter SVG, 800 x 600 | implemented-unverified |
 
 ## Known gaps

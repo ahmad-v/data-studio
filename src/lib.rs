@@ -12,8 +12,11 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv, .tsv or .parquet output."},
  Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Optional new CSV or Parquet output."},
+ Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Stable ascending text order. Optional CSV, TSV or Parquet output."},
+ Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
+ Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
  Operation{id:"export",label:"Export",hint:"Export to .csv, .tsv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
@@ -251,6 +254,21 @@ fn select_columns(table: Table, parameter: &str, job: &Job) -> Result<Table> {
     validate(headers, rows)
 }
 
+fn deduplicate(rows: Vec<Vec<String>>, job: &Job) -> Result<Vec<Vec<String>>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut keep = Vec::with_capacity(rows.len());
+    for row in &rows {
+        job.check()?;
+        keep.push(seen.insert(row));
+    }
+    drop(seen);
+    Ok(rows
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(row, keep)| keep.then_some(row))
+        .collect())
+}
+
 fn value_counts(table: &Table, index: usize, job: &Job) -> Result<String> {
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
     for row in &table.rows {
@@ -308,6 +326,56 @@ fn summary(t: &Table, i: usize, j: &Job) -> Result<String> {
         &serde_json::json!({"n":n,"missing":missing,"mean":mean,"sample_sd":sd,"min":min,"max":max,"method":"Welford, sample denominator n-1"}),
     )?)
 }
+fn column_pair(table: &Table, parameter: &str) -> Result<(usize, usize)> {
+    let (x, y) = parameter
+        .split_once(',')
+        .ok_or_else(|| Error::input("Expected x-column,y-column"))?;
+    Ok((column(table, x)?, column(table, y)?))
+}
+
+fn correlation(table: &Table, x: usize, y: usize, job: &Job) -> Result<String> {
+    let mut n = 0;
+    let (mut mean_x, mut mean_y) = (0.0, 0.0);
+    let (mut sum_xx, mut sum_yy, mut sum_xy) = (0.0, 0.0, 0.0);
+    for row in &table.rows {
+        job.check()?;
+        let (a, b) = (row[x].trim(), row[y].trim());
+        if a.is_empty() || b.is_empty() {
+            continue;
+        }
+        let (a, b): (f64, f64) = (a.parse().map_err(err)?, b.parse().map_err(err)?);
+        if !a.is_finite() || !b.is_finite() {
+            return Err(Error::input("Nonfinite numeric value in a complete pair"));
+        }
+        n += 1;
+        let (dx, dy) = (a - mean_x, b - mean_y);
+        mean_x += dx / n as f64;
+        mean_y += dy / n as f64;
+        sum_xx += dx * (a - mean_x);
+        sum_yy += dy * (b - mean_y);
+        sum_xy += dx * (b - mean_y);
+        if !sum_xx.is_finite() || !sum_yy.is_finite() || !sum_xy.is_finite() {
+            return Err(Error::input("Numerical overflow"));
+        }
+    }
+    if n < 2 || sum_xx <= 0.0 || sum_yy <= 0.0 {
+        return Err(Error::input(
+            "Correlation requires at least two complete pairs and nonzero variance in both columns",
+        ));
+    }
+    // Divide by the larger norm first to avoid an intermediate overflow.
+    let (norm_x, norm_y) = (sum_xx.sqrt(), sum_yy.sqrt());
+    let r = sum_xy / norm_x.max(norm_y) / norm_x.min(norm_y);
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "x": table.headers[x],
+        "y": table.headers[y],
+        "n": n,
+        "excluded_blank_pairs": table.rows.len() - n,
+        "r": r.clamp(-1.0, 1.0),
+        "method": "Pearson product-moment correlation, complete pairs",
+    }))?)
+}
+
 fn safe(s: &str) -> String {
     if s.trim_start().starts_with(['=', '+', '-', '@']) || s.starts_with(['\t', '\r', '\n']) {
         format!("'{s}")
@@ -364,12 +432,12 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     let preview = match r.operation.as_str() {
         "counts" => value_counts(&t, column(&t, &r.parameter)?, &j)?,
         "summary" => summary(&t, column(&t, &r.parameter)?, &j)?,
+        "correlation" => {
+            let (x, y) = column_pair(&t, &r.parameter)?;
+            correlation(&t, x, y, &j)?
+        }
         "scatter" => {
-            let (a, b) = r
-                .parameter
-                .split_once(',')
-                .ok_or_else(|| Error::input("Expected x-column,y-column"))?;
-            let (a, b) = (column(&t, a)?, column(&t, b)?);
+            let (a, b) = column_pair(&t, &r.parameter)?;
             if r.output.extension().and_then(|x| x.to_str()) != Some("svg") {
                 return Err(Error::input("Expected .svg"));
             }
@@ -394,21 +462,28 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 points.len()
             )
         }
-        "preview" | "filter" | "export" | "select-columns" => {
-            if r.operation == "select-columns" {
-                t = select_columns(t, &r.parameter, &j)?;
-            }
-            if r.operation == "filter" {
-                let (name, value) = r
-                    .parameter
-                    .split_once('=')
-                    .ok_or_else(|| Error::input("Expected column=value"))?;
-                let i = column(&t, name)?;
-                t.rows.retain(|row| row[i] == value);
+        "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate" => {
+            match r.operation.as_str() {
+                "select-columns" => t = select_columns(t, &r.parameter, &j)?,
+                "filter" => {
+                    let (name, value) = r
+                        .parameter
+                        .split_once('=')
+                        .ok_or_else(|| Error::input("Expected column=value"))?;
+                    let index = column(&t, name)?;
+                    t.rows.retain(|row| row[index] == value);
+                }
+                "sort" => {
+                    let index = column(&t, &r.parameter)?;
+                    j.check()?;
+                    t.rows.sort_by(|a, b| a[index].cmp(&b[index]));
+                    j.check()?;
+                }
+                "deduplicate" => t.rows = deduplicate(t.rows, &j)?,
+                _ => {}
             }
             if r.operation == "export"
-                || (matches!(r.operation.as_str(), "filter" | "select-columns")
-                    && !r.output.as_os_str().is_empty())
+                || (r.operation != "preview" && !r.output.as_os_str().is_empty())
             {
                 j.check()?;
                 export(&t, &r.output, &j)?;
@@ -481,6 +556,48 @@ mod tests {
         assert_eq!(reordered.headers, ["two", "one"]);
         assert_eq!(reordered.rows[0], ["y", "x"]);
         assert!(select_columns(reordered, "two,two", &Job::new()).is_err());
+    }
+
+    #[test]
+    fn correlation_uses_only_complete_pairs() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("pairs.csv");
+        std::fs::write(&input, "x,y,constant\n1,6,1\n2,4,1\n3,2,1\n4,,1\n").unwrap();
+        let request = |parameter: &str| Request {
+            operation: "correlation".into(),
+            input: input.clone(),
+            parameter: parameter.into(),
+            ..Request::default()
+        };
+        let outcome = handle(request("x,y"), Job::new()).unwrap();
+        let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+        assert_eq!(report["n"], 3);
+        assert_eq!(report["excluded_blank_pairs"], 1);
+        assert!((report["r"].as_f64().unwrap() + 1.0).abs() < 1e-12);
+        assert!(handle(request("x,constant"), Job::new()).is_err());
+    }
+
+    #[test]
+    fn sort_is_stable_and_deduplication_keeps_first_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("rows.csv");
+        std::fs::write(&input, "key,name\nb,B\na,First\na,Second\na,First\n").unwrap();
+        for (operation, parameter, expected) in [
+            ("sort", "key", "key,name\na,First\na,Second\na,First\nb,B\n"),
+            ("deduplicate", "", "key,name\nb,B\na,First\na,Second\n"),
+        ] {
+            let output = dir.path().join(format!("{operation}.csv"));
+            let request = Request {
+                operation: operation.into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: parameter.into(),
+                ..Request::default()
+            };
+            handle(request.clone(), Job::new()).unwrap();
+            assert_eq!(std::fs::read_to_string(&output).unwrap(), expected);
+            assert!(handle(request, Job::new()).is_err());
+        }
     }
 
     #[test]
