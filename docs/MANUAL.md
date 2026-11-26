@@ -45,3 +45,5 @@ Use `mask-column` with a `column` field to include a fixed mask step. The option
 ## Join two tables
 
 Choose `inner-join` with the left table as Input. The operation parameter is JSON, for example `{"right_path":"lookup.tsv","left_key":"id","right_key":"code"}`. Keys are exact nonempty text. Unmatched and blank keys are omitted. Duplicate keys produce every matching pair in input order. The right key column is omitted and other columns from the right table use the `right.` prefix. Name collisions, more than 256 columns or 500,000 cells and joined text over 32 MiB cause the operation to fail before saving. Use a new CSV, TSV or Parquet output or leave it blank to preview. XLSX joins use the first sheet.
+
+Use `group-summary` with `group-column,value-column`. One row per exact group appears in text sort order. Blank numeric values count as missing. Sample SD uses n−1 and is blank below two observations. Groups with no numeric values retain their counts and blank statistics. Preview the result or write a new CSV, TSV or Parquet. The usual delimited-text formula guard applies to exported text cells.

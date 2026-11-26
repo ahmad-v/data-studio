@@ -68,6 +68,13 @@
       "fixture_status": "Linux x86_64 replay, CLI export and failed-step isolation passed"
     },
     {
+      "operation": "group-summary",
+      "description": "Grouped finite numeric descriptive statistics",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Grouped summary checked against independent Python statistics"
+    },
+    {
       "operation": "summary",
       "description": "Numeric column n, missing, mean, sample SD, min/max",
       "status": "implemented-unverified",

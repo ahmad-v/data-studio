@@ -21,6 +21,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Exact nonblank text keys. Optional new CSV, TSV or Parquet output."#},
  Operation{id:"run-project",label:"Run data project",hint:"Enter the project JSON path. Preview a local table or write it to a new CSV, TSV or Parquet file."},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
+ Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
@@ -369,42 +370,107 @@ fn value_counts(table: &Table, index: usize, job: &Job) -> Result<String> {
     }))?)
 }
 
-fn summary(t: &Table, i: usize, j: &Job) -> Result<String> {
-    let (mut n, mut missing, mut mean, mut m2) = (0u64, 0u64, 0.0f64, 0.0f64);
-    let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
-    for row in &t.rows {
-        j.check()?;
-        let s = row[i].trim();
-        if s.is_empty() {
-            missing += 1;
-            continue;
+struct NumericSummary {
+    n: u64,
+    missing: u64,
+    mean: f64,
+    m2: f64,
+    min: f64,
+    max: f64,
+}
+
+impl Default for NumericSummary {
+    fn default() -> Self {
+        Self {
+            n: 0,
+            missing: 0,
+            mean: 0.0,
+            m2: 0.0,
+            min: f64::INFINITY,
+            max: f64::NEG_INFINITY,
         }
-        let x: f64 = s.parse().map_err(err)?;
+    }
+}
+
+impl NumericSummary {
+    fn add(&mut self, value: &str) -> Result<()> {
+        let value = value.trim();
+        if value.is_empty() {
+            self.missing += 1;
+            return Ok(());
+        }
+        let x: f64 = value.parse().map_err(err)?;
         if !x.is_finite() {
             return Err(Error::input("Nonfinite numeric value"));
         }
-        n += 1;
-        let delta = x - mean;
-        mean += delta / n as f64;
-        m2 += delta * (x - mean);
-        min = min.min(x);
-        max = max.max(x);
-        if !mean.is_finite() || !m2.is_finite() {
+        self.n += 1;
+        let delta = x - self.mean;
+        self.mean += delta / self.n as f64;
+        self.m2 += delta * (x - self.mean);
+        self.min = self.min.min(x);
+        self.max = self.max.max(x);
+        if !self.mean.is_finite() || !self.m2.is_finite() {
             return Err(Error::input("Numerical overflow"));
         }
+        Ok(())
     }
-    if n == 0 {
+
+    fn sample_sd(&self) -> Option<f64> {
+        (self.n > 1).then(|| (self.m2 / (self.n - 1) as f64).max(0.0).sqrt())
+    }
+}
+
+fn summary(table: &Table, index: usize, job: &Job) -> Result<String> {
+    let mut stats = NumericSummary::default();
+    for row in &table.rows {
+        job.check()?;
+        stats.add(&row[index])?;
+    }
+    if stats.n == 0 {
         return Err(Error::input("No finite numeric observations"));
     }
-    let sd = if n > 1 {
-        Some((m2 / (n - 1) as f64).max(0.0).sqrt())
-    } else {
-        None
-    };
-    Ok(serde_json::to_string_pretty(
-        &serde_json::json!({"n":n,"missing":missing,"mean":mean,"sample_sd":sd,"min":min,"max":max,"method":"Welford, sample denominator n-1"}),
-    )?)
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "n":stats.n, "missing":stats.missing, "mean":stats.mean, "sample_sd":stats.sample_sd(),
+        "min":stats.min, "max":stats.max, "method":"Welford, sample denominator n-1",
+    }))?)
 }
+
+fn grouped_summary(table: &Table, group: usize, value: usize, job: &Job) -> Result<Table> {
+    use std::collections::{btree_map::Entry, BTreeMap};
+    let headers = ["group", "n", "missing", "mean", "sample_sd", "min", "max"];
+    let mut budget = MAX_CELLS / headers.len();
+    let mut groups = BTreeMap::<&str, NumericSummary>::new();
+    for row in &table.rows {
+        job.check()?;
+        let stats = match groups.entry(row[group].as_str()) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                budget = budget
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::input("Grouped summary exceeds the cell limit"))?;
+                entry.insert(NumericSummary::default())
+            }
+        };
+        stats.add(&row[value])?;
+    }
+    let mut rows = Vec::with_capacity(groups.len());
+    for (key, stats) in groups {
+        job.check()?;
+        let display = |value: Option<f64>| value.map(|value| value.to_string()).unwrap_or_default();
+        let observed = stats.n != 0;
+        rows.push(vec![
+            key.into(),
+            stats.n.to_string(),
+            stats.missing.to_string(),
+            display(observed.then_some(stats.mean)),
+            display(stats.sample_sd()),
+            display(observed.then_some(stats.min)),
+            display(observed.then_some(stats.max)),
+        ]);
+    }
+    validate(headers.into_iter().map(str::to_owned).collect(), rows)
+}
+
 fn column_pair(table: &Table, parameter: &str) -> Result<(usize, usize)> {
     let (x, y) = parameter
         .split_once(',')
@@ -628,7 +694,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             )
         }
         "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate"
-        | "mask-column" | "run-project" | "inner-join" => {
+        | "mask-column" | "run-project" | "inner-join" | "group-summary" => {
             if let Some(project) = project {
                 let (result, steps, masked) = project.run(t, &j)?;
                 t = result;
@@ -636,6 +702,10 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 if masked {
                     warnings.push(MASK_WARNING.into());
                 }
+            } else if r.operation == "group-summary" {
+                let (group, value) = column_pair(&t, &r.parameter)?;
+                t = grouped_summary(&t, group, value, &j)?;
+                warnings.push("Group labels are exact text, including blanks. Blank numeric cells are excluded, undefined statistics are blank, and sample SD uses n-1.".into());
             } else if r.operation == "inner-join" {
                 t = join::inner(t, &r.parameter, &j)?;
                 warnings.push("Inner join uses exact text keys. Blank and unmatched keys are excluded. Matching duplicate keys produce every matching pair.".into());
@@ -724,6 +794,31 @@ mod tests {
         assert_eq!(reordered.headers, ["two", "one"]);
         assert_eq!(reordered.rows[0], ["y", "x"]);
         assert!(select_columns(reordered, ["two", "two"], &Job::new()).is_err());
+    }
+
+    #[test]
+    fn grouped_summary_keeps_empty_groups_and_uses_sample_deviation() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let output = dir.path().join("out.tsv");
+        std::fs::write(&input, "group,x\nA,1\nA,3\nA,\nB,2\nC,\n").unwrap();
+        handle(
+            Request {
+                operation: "group-summary".into(),
+                parameter: "group,x".into(),
+                input,
+                output: output.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let table = load(&output, None, &Job::new()).unwrap();
+        assert_eq!(table.rows[0][..4], ["A", "2", "1", "2"]);
+        let sample_sd = table.rows[0][4].parse::<f64>().unwrap();
+        assert!((sample_sd - 2.0f64.sqrt()).abs() < 1e-12);
+        assert_eq!(table.rows[1], ["B", "1", "0", "2", "", "2", "2"]);
+        assert_eq!(table.rows[2], ["C", "0", "1", "", "", "", ""]);
     }
 
     #[test]
