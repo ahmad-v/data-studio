@@ -8,21 +8,21 @@
       "operation": "select-columns",
       "description": "Select and reorder table columns",
       "status": "implemented-unverified",
-      "targets": [],
-      "fixture_status": "pending compilation"
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 fixtures passed"
     },
     {
       "operation": "counts",
       "description": "Exact value counts for a column",
       "status": "implemented-unverified",
-      "targets": [],
-      "fixture_status": "pending compilation"
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 fixtures passed"
     },
     {
       "operation": "preview",
       "description": "CSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview",
       "status": "implemented-unverified",
-      "targets": [],
+      "targets": ["x86_64-unknown-linux-gnu"],
       "fixture_status": "not run"
     },
     {
@@ -36,15 +36,15 @@
       "operation": "sort",
       "description": "Stable ascending text sort by one column",
       "status": "implemented-unverified",
-      "targets": [],
-      "fixture_status": "pending compilation"
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 fixtures passed"
     },
     {
       "operation": "deduplicate",
       "description": "Keep the first occurrence of each exact row",
       "status": "implemented-unverified",
-      "targets": [],
-      "fixture_status": "pending compilation"
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 fixtures passed"
     },
     {
       "operation": "summary",
@@ -64,8 +64,15 @@
       "operation": "correlation",
       "description": "Pearson coefficient on complete numeric pairs",
       "status": "implemented-unverified",
-      "targets": [],
-      "fixture_status": "pending compilation"
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 fixtures passed"
+    },
+    {
+      "operation": "linear-regression",
+      "description": "Ordinary least squares with intercept and complete numeric pairs",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 regression suite and independent arithmetic CLI fixture passed"
     },
     {
       "operation": "scatter",

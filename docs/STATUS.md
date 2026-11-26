@@ -4,15 +4,16 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 
 | Operation | Scope | Status |
 |---|---|---|
-| select-columns | Select and reorder table columns | implemented-unverified |
-| counts | Exact value counts for a column | implemented-unverified |
-| preview | CSV, TSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview | TSV pending compilation |
+| select-columns | Select and reorder table columns | Linux fixture-tested |
+| counts | Exact value counts for a column | Linux fixture-tested |
+| preview | CSV, TSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview | Linux fixture-tested |
 | filter | Exact-match filter; CSV or string Parquet | Linux fixture-tested |
-| sort | Stable ascending text sort by one column | implemented-unverified |
-| deduplicate | Keep the first occurrence of each exact row | implemented-unverified |
+| sort | Stable ascending text sort by one column | Linux fixture-tested |
+| deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |
-| correlation | Pearson coefficient on complete numeric pairs | implemented-unverified |
+| linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
+| correlation | Pearson coefficient on complete numeric pairs | Linux fixture-tested |
 | scatter | Monochrome scatter SVG, 800 x 600 | implemented-unverified |
 
 ## Known gaps

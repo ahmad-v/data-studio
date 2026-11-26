@@ -10,6 +10,7 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `deduplicate`: Keep the first occurrence of each full row. Leave the parameter blank. Both operations can preview rows or export to a new CSV, TSV or Parquet file.
 - `summary`: Numeric column n, missing, mean, sample SD, min/max.
 - `export`: CSV formula guard; Parquet UTF-8 columns.
+- `linear-regression`: Enter exact predictor and response column names separated by a comma. The preview reports the least-squares intercept, slope, R² and complete and excluded pair counts. It uses finite numeric complete pairs. A constant response yields an undefined R². Inferential statistics are outside this route.
 - `correlation`: Enter two exact column names separated by a comma. The preview reports Pearson's r and the complete and excluded pair counts. Blank pairs are excluded. Both columns must vary, and every complete pair must be finite numeric data.
 - `scatter`: Monochrome scatter SVG, 800 x 600.
 
@@ -19,4 +20,4 @@ No output overwrite is allowed. No accounts, ads, telemetry or runtime downloads
 
 Parquet import supports flat, uncompressed UTF-8 columns. Nulls become blank text. Numeric, nested, and compressed input returns an error. Preview, filter, numeric summary, scatter, and export all accept this input through the same table loader.
 
-For tab-separated text, use the .tsv extension on input or output. Quoted fields can contain tabs. The same size, header and formula-guard rules apply as for CSV. TSV execution tests are pending compilation.
+For tab-separated text, use the .tsv extension on input or output. Quoted fields can contain tabs. The same size, header and formula-guard rules apply as for CSV. TSV passed the Linux round-trip fixture.

@@ -17,6 +17,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
+ Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
  Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
  Operation{id:"export",label:"Export",hint:"Export to .csv, .tsv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
@@ -333,7 +334,16 @@ fn column_pair(table: &Table, parameter: &str) -> Result<(usize, usize)> {
     Ok((column(table, x)?, column(table, y)?))
 }
 
-fn correlation(table: &Table, x: usize, y: usize, job: &Job) -> Result<String> {
+struct PairMoments {
+    n: usize,
+    mean_x: f64,
+    mean_y: f64,
+    sum_xx: f64,
+    sum_yy: f64,
+    sum_xy: f64,
+}
+
+fn pair_moments(table: &Table, x: usize, y: usize, job: &Job) -> Result<PairMoments> {
     let mut n = 0;
     let (mut mean_x, mut mean_y) = (0.0, 0.0);
     let (mut sum_xx, mut sum_yy, mut sum_xy) = (0.0, 0.0, 0.0);
@@ -358,21 +368,69 @@ fn correlation(table: &Table, x: usize, y: usize, job: &Job) -> Result<String> {
             return Err(Error::input("Numerical overflow"));
         }
     }
-    if n < 2 || sum_xx <= 0.0 || sum_yy <= 0.0 {
-        return Err(Error::input(
-            "Correlation requires at least two complete pairs and nonzero variance in both columns",
-        ));
+    Ok(PairMoments {
+        n,
+        mean_x,
+        mean_y,
+        sum_xx,
+        sum_yy,
+        sum_xy,
+    })
+}
+
+impl PairMoments {
+    fn pearson_r(&self) -> Result<f64> {
+        if self.n < 2 || self.sum_xx <= 0.0 || self.sum_yy <= 0.0 {
+            return Err(Error::input(
+                "Correlation requires at least two complete pairs and nonzero variance in both columns",
+            ));
+        }
+        // Divide by the larger norm first to avoid an intermediate overflow.
+        let (norm_x, norm_y) = (self.sum_xx.sqrt(), self.sum_yy.sqrt());
+        Ok((self.sum_xy / norm_x.max(norm_y) / norm_x.min(norm_y)).clamp(-1.0, 1.0))
     }
-    // Divide by the larger norm first to avoid an intermediate overflow.
-    let (norm_x, norm_y) = (sum_xx.sqrt(), sum_yy.sqrt());
-    let r = sum_xy / norm_x.max(norm_y) / norm_x.min(norm_y);
+}
+
+fn correlation(table: &Table, x: usize, y: usize, job: &Job) -> Result<String> {
+    let moments = pair_moments(table, x, y, job)?;
     Ok(serde_json::to_string_pretty(&serde_json::json!({
         "x": table.headers[x],
         "y": table.headers[y],
-        "n": n,
-        "excluded_blank_pairs": table.rows.len() - n,
-        "r": r.clamp(-1.0, 1.0),
+        "n": moments.n,
+        "excluded_blank_pairs": table.rows.len() - moments.n,
+        "r": moments.pearson_r()?,
         "method": "Pearson product-moment correlation, complete pairs",
+    }))?)
+}
+
+fn linear_regression(table: &Table, x: usize, y: usize, job: &Job) -> Result<String> {
+    let moments = pair_moments(table, x, y, job)?;
+    if moments.n < 2 || moments.sum_xx <= 0.0 {
+        return Err(Error::input(
+            "Regression requires at least two complete pairs and nonzero predictor variance",
+        ));
+    }
+    let slope = moments.sum_xy / moments.sum_xx;
+    let intercept = (-slope).mul_add(moments.mean_x, moments.mean_y);
+    if !slope.is_finite() || !intercept.is_finite() {
+        return Err(Error::input(
+            "Numerical overflow in regression coefficients",
+        ));
+    }
+    let r_squared = if moments.sum_yy > 0.0 {
+        Some(moments.pearson_r()?.powi(2))
+    } else {
+        None
+    };
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "predictor": table.headers[x],
+        "response": table.headers[y],
+        "n": moments.n,
+        "excluded_blank_pairs": table.rows.len() - moments.n,
+        "intercept": intercept,
+        "slope": slope,
+        "r_squared": r_squared,
+        "method": "Ordinary least squares with intercept, complete pairs",
     }))?)
 }
 
@@ -435,6 +493,10 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         "correlation" => {
             let (x, y) = column_pair(&t, &r.parameter)?;
             correlation(&t, x, y, &j)?
+        }
+        "linear-regression" => {
+            let (x, y) = column_pair(&t, &r.parameter)?;
+            linear_regression(&t, x, y, &j)?
         }
         "scatter" => {
             let (a, b) = column_pair(&t, &r.parameter)?;
@@ -575,6 +637,36 @@ mod tests {
         assert_eq!(report["excluded_blank_pairs"], 1);
         assert!((report["r"].as_f64().unwrap() + 1.0).abs() < 1e-12);
         assert!(handle(request("x,constant"), Job::new()).is_err());
+    }
+
+    #[test]
+    fn fits_ordinary_least_squares_and_handles_constant_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("fit.csv");
+        std::fs::write(&input, "x,y,constant\n1,2,4\n2,4,4\n3,7,4\n4,,4\n").unwrap();
+        let fit = |parameter: &str| {
+            handle(
+                Request {
+                    operation: "linear-regression".into(),
+                    input: input.clone(),
+                    parameter: parameter.into(),
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+        };
+        let report: serde_json::Value = serde_json::from_str(&fit("x,y").unwrap().preview).unwrap();
+        assert_eq!(report["n"], 3);
+        assert_eq!(report["excluded_blank_pairs"], 1);
+        assert!((report["intercept"].as_f64().unwrap() + 2.0 / 3.0).abs() < 1e-12);
+        assert!((report["slope"].as_f64().unwrap() - 2.5).abs() < 1e-12);
+        assert!((report["r_squared"].as_f64().unwrap() - 75.0 / 76.0).abs() < 1e-12);
+        let constant: serde_json::Value =
+            serde_json::from_str(&fit("x,constant").unwrap().preview).unwrap();
+        assert_eq!(constant["slope"], 0.0);
+        assert_eq!(constant["intercept"], 4.0);
+        assert!(constant["r_squared"].is_null());
+        assert!(fit("constant,y").is_err());
     }
 
     #[test]
