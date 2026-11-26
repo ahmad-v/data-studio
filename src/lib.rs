@@ -11,6 +11,7 @@ use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
  Operation{id:"preview",label:"Preview",hint:"Preview CSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv or .parquet output."},
+ Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Optional new CSV or Parquet output."},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
@@ -222,6 +223,31 @@ fn column(t: &Table, name: &str) -> Result<usize> {
         .position(|h| h == name)
         .ok_or_else(|| Error::input("Column not found"))
 }
+fn select_columns(table: Table, parameter: &str, job: &Job) -> Result<Table> {
+    let mut seen = std::collections::HashSet::new();
+    let mut columns = Vec::new();
+    for name in parameter.split(',') {
+        let index = column(&table, name)?;
+        if !seen.insert(index) {
+            return Err(Error::input("A column was selected more than once"));
+        }
+        columns.push(index);
+    }
+    let headers = columns
+        .iter()
+        .map(|&index| table.headers[index].clone())
+        .collect();
+    let rows = table
+        .rows
+        .into_iter()
+        .map(|row| {
+            job.check()?;
+            Ok(columns.iter().map(|&index| row[index].clone()).collect())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    validate(headers, rows)
+}
+
 fn value_counts(table: &Table, index: usize, job: &Job) -> Result<String> {
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
     for row in &table.rows {
@@ -362,7 +388,10 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 points.len()
             )
         }
-        "preview" | "filter" | "export" => {
+        "preview" | "filter" | "export" | "select-columns" => {
+            if r.operation == "select-columns" {
+                t = select_columns(t, &r.parameter, &j)?;
+            }
             if r.operation == "filter" {
                 let (name, value) = r
                     .parameter
@@ -372,7 +401,8 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 t.rows.retain(|row| row[i] == value);
             }
             if r.operation == "export"
-                || (r.operation == "filter" && !r.output.as_os_str().is_empty())
+                || (matches!(r.operation.as_str(), "filter" | "select-columns")
+                    && !r.output.as_os_str().is_empty())
             {
                 j.check()?;
                 export(&t, &r.output, &j)?;
@@ -434,6 +464,19 @@ mod tests {
         assert_eq!(imported.headers, t.headers);
         assert_eq!(imported.rows, t.rows);
     }
+    #[test]
+    fn selects_columns_in_requested_order() {
+        let table = validate(
+            vec!["one".into(), "two".into()],
+            vec![vec!["x".into(), "y".into()]],
+        )
+        .unwrap();
+        let reordered = select_columns(table, "two,one", &Job::new()).unwrap();
+        assert_eq!(reordered.headers, ["two", "one"]);
+        assert_eq!(reordered.rows[0], ["y", "x"]);
+        assert!(select_columns(reordered, "two,two", &Job::new()).is_err());
+    }
+
     #[test]
     fn formula_guard() {
         assert_eq!(safe(" =1+1"), "' =1+1");

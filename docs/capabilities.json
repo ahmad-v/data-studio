@@ -5,6 +5,13 @@
   "verified_capabilities": [],
   "development_routes": [
     {
+      "operation": "select-columns",
+      "description": "Select and reorder table columns",
+      "status": "implemented-unverified",
+      "targets": [],
+      "fixture_status": "pending compilation"
+    },
+    {
       "operation": "counts",
       "description": "Exact value counts for a column",
       "status": "implemented-unverified",
