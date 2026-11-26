@@ -12,6 +12,7 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `export`: CSV formula guard; Parquet UTF-8 columns.
 - `linear-regression`: Enter exact predictor and response column names separated by a comma. The preview reports the least-squares intercept, slope, R² and complete and excluded pair counts. It uses finite numeric complete pairs. A constant response yields an undefined R². Inferential statistics are outside this route.
 - `correlation`: Enter two exact column names separated by a comma. The preview reports Pearson's r and the complete and excluded pair counts. Blank pairs are excluded. Both columns must vary, and every complete pair must be finite numeric data.
+- `line-chart`: Enter two numeric column names separated by a comma. Write a new monochrome SVG. Complete pairs are connected in table order, including across missing rows.
 - `scatter`: Monochrome scatter SVG, 800 x 600.
 
 Limitations: In-memory text table only; no inferred types, large-data virtualization, formulas, rich statistics, project pipelines, other formats, authoritative palettes or full scientific export. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.

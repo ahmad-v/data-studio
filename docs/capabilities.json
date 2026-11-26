@@ -75,6 +75,13 @@
       "fixture_status": "Linux x86_64 regression suite and independent arithmetic CLI fixture passed"
     },
     {
+      "operation": "line-chart",
+      "description": "Monochrome vector lines in table order",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 vector fixture passed"
+    },
+    {
       "operation": "scatter",
       "description": "Monochrome scatter SVG, 800 x 600",
       "status": "implemented-unverified",

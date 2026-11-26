@@ -18,6 +18,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
+ Operation{id:"line-chart",label:"Line chart SVG",hint:"Enter x-column,y-column. Complete numeric rows connect in table order. Choose a new .svg file."},
  Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
  Operation{id:"export",label:"Export",hint:"Export to .csv, .tsv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
@@ -498,7 +499,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             let (x, y) = column_pair(&t, &r.parameter)?;
             linear_regression(&t, x, y, &j)?
         }
-        "scatter" => {
+        "scatter" | "line-chart" => {
             let (a, b) = column_pair(&t, &r.parameter)?;
             if r.output.extension().and_then(|x| x.to_str()) != Some("svg") {
                 return Err(Error::input("Expected .svg"));
@@ -510,14 +511,18 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                     continue;
                 }
                 if points.len() >= 10000 {
-                    return Err(Error::input("Scatter point limit"));
+                    return Err(Error::input("Figure point limit"));
                 }
                 points.push((
                     row[a].trim().parse().map_err(err)?,
                     row[b].trim().parse().map_err(err)?,
                 ));
             }
-            localwright_core::figure::export_scatter(&r.output, &points, 800, 600)?;
+            if r.operation == "line-chart" {
+                localwright_core::figure::export_line(&r.output, &points, 800, 600)?;
+            } else {
+                localwright_core::figure::export_scatter(&r.output, &points, 800, 600)?;
+            }
             written = Some(r.output);
             format!(
                 "{} complete cases plotted; missing pairs excluded",
@@ -618,6 +623,29 @@ mod tests {
         assert_eq!(reordered.headers, ["two", "one"]);
         assert_eq!(reordered.rows[0], ["y", "x"]);
         assert!(select_columns(reordered, "two,two", &Job::new()).is_err());
+    }
+
+    #[test]
+    fn writes_a_vector_line_chart_in_table_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("series.csv");
+        let output = dir.path().join("series.svg");
+        std::fs::write(&input, "x,y\n3,0\n1,5\n2,2.5\n4,\n").unwrap();
+        let result = handle(
+            Request {
+                operation: "line-chart".into(),
+                input,
+                output: output.clone(),
+                parameter: "x,y".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert!(result.preview.contains("3 complete cases"));
+        let chart = std::fs::read_to_string(output).unwrap();
+        assert!(chart.contains(r#"points=" 780.000,550.000 60.000,20.000 420.000,285.000""#));
+        assert!(!chart.contains("<image"));
     }
 
     #[test]
