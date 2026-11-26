@@ -6,7 +6,7 @@
   "development_routes": [
     {
       "operation": "preview",
-      "description": "CSV / first XLSX sheet text preview",
+      "description": "CSV / named or first XLSX sheet text preview",
       "status": "implemented-unverified",
       "targets": [],
       "fixture_status": "not run"
