@@ -11,6 +11,7 @@ use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
  Operation{id:"preview",label:"Preview",hint:"Preview CSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv or .parquet output."},
+ Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
  Operation{id:"export",label:"Export",hint:"Export to .csv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
@@ -221,6 +222,27 @@ fn column(t: &Table, name: &str) -> Result<usize> {
         .position(|h| h == name)
         .ok_or_else(|| Error::input("Column not found"))
 }
+fn value_counts(table: &Table, index: usize, job: &Job) -> Result<String> {
+    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+    for row in &table.rows {
+        job.check()?;
+        *counts.entry(&row[index]).or_default() += 1;
+    }
+    let groups = counts.len();
+    let mut ranked = counts.into_iter().collect::<Vec<_>>();
+    ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let preview = ranked
+        .into_iter()
+        .take(30)
+        .map(|(value, count)| serde_json::json!({"value":value,"count":count}))
+        .collect::<Vec<_>>();
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "rows": table.rows.len(),
+        "distinct_values": groups,
+        "counts": preview,
+    }))?)
+}
+
 fn summary(t: &Table, i: usize, j: &Job) -> Result<String> {
     let (mut n, mut missing, mut mean, mut m2) = (0u64, 0u64, 0.0f64, 0.0f64);
     let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
@@ -308,6 +330,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     let mut t = load(&r.input, sheet, &j)?;
     let mut written = None;
     let preview = match r.operation.as_str() {
+        "counts" => value_counts(&t, column(&t, &r.parameter)?, &j)?,
         "summary" => summary(&t, column(&t, &r.parameter)?, &j)?,
         "scatter" => {
             let (a, b) = r
@@ -378,6 +401,13 @@ mod tests {
         assert_eq!(v["mean"], 2.0);
         assert_eq!(v["sample_sd"], 1.0);
         assert_eq!(v["missing"], 1);
+        let counts: serde_json::Value =
+            serde_json::from_str(&value_counts(&t, 0, &Job::new()).unwrap()).unwrap();
+        assert_eq!(counts["distinct_values"], 2);
+        assert_eq!(
+            counts["counts"][0],
+            serde_json::json!({"value":"a","count":3})
+        );
         let q = d.path().join("out.csv");
         handle(
             Request {

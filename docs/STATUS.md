@@ -4,6 +4,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 
 | Operation | Scope | Status |
 |---|---|---|
+| counts | Exact value counts for a column | implemented-unverified |
 | preview | CSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview | Linux fixture-tested |
 | filter | Exact-match filter; CSV or string Parquet | Linux fixture-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |

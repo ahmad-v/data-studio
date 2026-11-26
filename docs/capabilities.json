@@ -5,6 +5,13 @@
   "verified_capabilities": [],
   "development_routes": [
     {
+      "operation": "counts",
+      "description": "Exact value counts for a column",
+      "status": "implemented-unverified",
+      "targets": [],
+      "fixture_status": "pending compilation"
+    },
+    {
       "operation": "preview",
       "description": "CSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview",
       "status": "implemented-unverified",
