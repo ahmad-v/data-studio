@@ -17,6 +17,7 @@ zip = { version = "=9.0.5", default-features = false, features = ["deflate"] }
 arrow-array = "=57.3.3"
 arrow-schema = "=57.3.3"
 parquet = { version = "=57.3.3", default-features = false, features = ["arrow"] }
+bytes = "=1.12.2"
 
 
 [features]

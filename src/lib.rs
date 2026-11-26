@@ -1,12 +1,15 @@
 #![forbid(unsafe_code)]
-use arrow_array::{ArrayRef, RecordBatch, StringArray};
+use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx};
 use localwright_core::*;
-use parquet::arrow::ArrowWriter;
+use parquet::{
+    arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
+    basic::Compression,
+};
 use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
- Operation{id:"preview",label:"Preview",hint:"Preview CSV or XLSX as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
+ Operation{id:"preview",label:"Preview",hint:"Preview CSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv or .parquet output."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
@@ -41,6 +44,99 @@ fn validate(headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<Table> {
     }
     Ok(Table { headers, rows })
 }
+fn load_parquet(bytes: Vec<u8>, job: &Job) -> Result<Table> {
+    const MAX_ROW_GROUPS: usize = 256;
+    const MAX_DECODED_BYTES: u64 = 32 * 1024 * 1024;
+
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).map_err(err)?;
+    let fields = builder.schema().fields();
+    if fields.is_empty() || fields.len() > MAX_COLS {
+        return Err(Error::input("Invalid Parquet column count"));
+    }
+    if fields
+        .iter()
+        .any(|field| field.data_type() != &DataType::Utf8)
+    {
+        return Err(Error::input(
+            "Parquet import supports flat UTF-8 string columns only",
+        ));
+    }
+    let headers = fields
+        .iter()
+        .map(|field| field.name().clone())
+        .collect::<Vec<_>>();
+    let max_rows = MAX_CELLS / headers.len();
+    let metadata = builder.metadata();
+    let expected_rows = usize::try_from(metadata.file_metadata().num_rows())
+        .map_err(|_| Error::input("Invalid Parquet row count"))?;
+    if expected_rows > max_rows || metadata.num_row_groups() > MAX_ROW_GROUPS {
+        return Err(Error::new(
+            ErrorKind::Limit,
+            "Parquet cell or row group limit exceeded",
+        ));
+    }
+    let mut declared_bytes = 0u64;
+    for group in metadata.row_groups() {
+        job.check()?;
+        for column in group.columns() {
+            if column.compression() != Compression::UNCOMPRESSED {
+                return Err(Error::input(
+                    "Parquet import currently supports uncompressed columns only",
+                ));
+            }
+            declared_bytes = u64::try_from(column.uncompressed_size())
+                .ok()
+                .and_then(|size| declared_bytes.checked_add(size))
+                .filter(|size| *size <= MAX_DECODED_BYTES)
+                .ok_or_else(|| {
+                    Error::new(ErrorKind::Limit, "Parquet declared byte limit exceeded")
+                })?;
+        }
+    }
+
+    let reader = builder.with_batch_size(1024).build().map_err(err)?;
+    let mut rows = Vec::new();
+    let mut decoded_bytes = 0u64;
+    for batch in reader {
+        job.check()?;
+        let batch = batch.map_err(err)?;
+        if rows.len().saturating_add(batch.num_rows()) > expected_rows {
+            return Err(Error::input("Parquet data exceeds declared row count"));
+        }
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|array| {
+                array
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| Error::input("Unexpected Parquet column type"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for index in 0..batch.num_rows() {
+            let mut row = Vec::with_capacity(columns.len());
+            for column in &columns {
+                let value = if column.is_null(index) {
+                    ""
+                } else {
+                    column.value(index)
+                };
+                decoded_bytes = decoded_bytes.saturating_add(value.len() as u64);
+                if decoded_bytes > MAX_DECODED_BYTES {
+                    return Err(Error::new(ErrorKind::Limit, "Parquet text limit exceeded"));
+                }
+                row.push(value.into());
+            }
+            rows.push(row);
+        }
+    }
+    if rows.len() != expected_rows {
+        return Err(Error::input("Parquet row count does not match metadata"));
+    }
+    validate(headers, rows)
+}
+
 fn load(p: &Path, sheet: Option<&str>, j: &Job) -> Result<Table> {
     let bytes = read_bounded(p, MAX_BYTES)?;
     j.check()?;
@@ -115,7 +211,8 @@ fn load(p: &Path, sheet: Option<&str>, j: &Job) -> Result<Table> {
             }
             validate(headers, records)
         }
-        _ => Err(Error::input("Expected CSV or XLSX")),
+        Some("parquet") => load_parquet(bytes, j),
+        _ => Err(Error::input("Expected CSV, XLSX or Parquet")),
     }
 }
 fn column(t: &Table, name: &str) -> Result<usize> {
@@ -265,7 +362,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         }
         _ => return Err(Error::input("Unknown operation")),
     };
-    Ok(Outcome{preview,written,warnings:vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. CSV export prefixes formula-like cells; Parquet uses strings.".into()],..Outcome::default()})
+    Ok(Outcome{preview,written,warnings:vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. CSV export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()],..Outcome::default()})
 }
 #[cfg(test)]
 mod tests {
@@ -297,11 +394,15 @@ mod tests {
         let pq = d.path().join("out.parquet");
         export(&t, &pq, &Job::new()).unwrap();
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-        let mut reader = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(pq).unwrap())
-            .unwrap()
-            .build()
-            .unwrap();
+        let mut reader =
+            ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(&pq).unwrap())
+                .unwrap()
+                .build()
+                .unwrap();
         assert_eq!(reader.next().unwrap().unwrap().num_rows(), 4);
+        let imported = load(&pq, None, &Job::new()).unwrap();
+        assert_eq!(imported.headers, t.headers);
+        assert_eq!(imported.rows, t.rows);
     }
     #[test]
     fn formula_guard() {
