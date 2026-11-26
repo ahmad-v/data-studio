@@ -6,11 +6,11 @@ use localwright_core::*;
 use parquet::arrow::ArrowWriter;
 use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
- Operation{id:"preview",label:"Preview",hint:"Import CSV or first XLSX worksheet as text; preview first 30 rows."},
+ Operation{id:"preview",label:"Preview",hint:"Preview CSV or XLSX as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv or .parquet output."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
- Operation{id:"export",label:"Export",hint:"Export table to new .csv or .parquet. CSV guards formula-like cells; Parquet uses UTF-8 strings."}];
+ Operation{id:"export",label:"Export",hint:"Export to .csv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
 struct Table {
     headers: Vec<String>,
@@ -41,7 +41,7 @@ fn validate(headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<Table> {
     }
     Ok(Table { headers, rows })
 }
-fn load(p: &Path, j: &Job) -> Result<Table> {
+fn load(p: &Path, sheet: Option<&str>, j: &Job) -> Result<Table> {
     let bytes = read_bounded(p, MAX_BYTES)?;
     j.check()?;
     match p
@@ -91,7 +91,11 @@ fn load(p: &Path, j: &Job) -> Result<Table> {
             let mut book: Xlsx<_> =
                 calamine::open_workbook_from_rs(Cursor::new(bytes)).map_err(err)?;
             let names = book.sheet_names();
-            let name = names.first().ok_or_else(|| Error::input("No worksheet"))?;
+            let name = match sheet {
+                Some(name) if names.iter().any(|item| item == name) => name,
+                Some(name) => return Err(Error::input(format!("Worksheet not found: {name}"))),
+                None => names.first().ok_or_else(|| Error::input("No worksheet"))?,
+            };
             let range = book.worksheet_range(name).map_err(err)?;
             let (h, w) = range.get_size();
             if w > MAX_COLS || h.saturating_mul(w) > MAX_CELLS {
@@ -202,7 +206,9 @@ fn export(t: &Table, p: &Path, j: &Job) -> Result<()> {
     }
 }
 pub fn handle(r: Request, j: Job) -> Result<Outcome> {
-    let mut t = load(&r.input, &j)?;
+    let sheet = (matches!(r.operation.as_str(), "preview" | "export") && !r.parameter.is_empty())
+        .then_some(r.parameter.as_str());
+    let mut t = load(&r.input, sheet, &j)?;
     let mut written = None;
     let preview = match r.operation.as_str() {
         "summary" => summary(&t, column(&t, &r.parameter)?, &j)?,
@@ -269,7 +275,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("input.csv");
         std::fs::write(&p, "group,x\na,1\nb,2\na,3\na,\n").unwrap();
-        let t = load(&p, &Job::new()).unwrap();
+        let t = load(&p, None, &Job::new()).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&summary(&t, 1, &Job::new()).unwrap()).unwrap();
         assert_eq!(v["mean"], 2.0);
@@ -287,7 +293,7 @@ mod tests {
             Job::new(),
         )
         .unwrap();
-        assert_eq!(load(&q, &Job::new()).unwrap().rows.len(), 3);
+        assert_eq!(load(&q, None, &Job::new()).unwrap().rows.len(), 3);
         let pq = d.path().join("out.parquet");
         export(&t, &pq, &Job::new()).unwrap();
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
