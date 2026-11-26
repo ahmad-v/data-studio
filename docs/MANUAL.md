@@ -16,10 +16,28 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `line-chart`: Enter two numeric column names separated by a comma. Write a new monochrome SVG. Complete pairs are connected in table order, including across missing rows.
 - `scatter`: Monochrome scatter SVG, 800 x 600.
 
-Limitations: In-memory text table only; no inferred types, large-data virtualization, formulas, rich statistics, project pipelines, other formats, authoritative palettes or full scientific export. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.
+Limitations: In-memory text table only; no inferred types, large-data virtualization, formulas, advanced statistics, project editing, undo, batch runs, other formats, authoritative palettes or full scientific export. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.
 
 No output overwrite is allowed. No accounts, ads, telemetry or runtime downloads are intended. Do not use this unverified snapshot with valuable or hostile input. Citation and donations are voluntary.
 
 Parquet import supports flat, uncompressed UTF-8 columns. Nulls become blank text. Numeric, nested, and compressed input returns an error. Preview, filter, numeric summary, scatter, and export all accept this input through the same table loader.
 
 For tab-separated text, use the .tsv extension on input or output. Quoted fields can contain tabs. The same size, header and formula-guard rules apply as for CSV. TSV passed the Linux round-trip fixture.
+
+## Save and replay a table project
+
+Create a UTF-8 JSON file with schema version 1 and up to 32 ordered steps. The example filters rows, removes exact duplicates, sorts by text ID, and projects the named columns.
+
+```json
+{
+  "schema_version": 1,
+  "steps": [
+    {"operation": "filter", "column": "group", "value": "sample"},
+    {"operation": "deduplicate"},
+    {"operation": "sort", "column": "id"},
+    {"operation": "select-columns", "columns": ["id", "group"]}
+  ]
+}
+```
+
+Use `mask-column` with a `column` field to include a fixed mask step. The optional top-level `worksheet` selects an exact XLSX sheet name. Set the table as Input and the project path as Parameter, or use `--cli run-project input.csv result.tsv project.json`. An empty output path previews the result. An invalid step reports its number and leaves the output absent. Keep project files local if filter values contain sensitive information. The project engine interprets only these operations and uses the same bounded text-table loader as individual routes.

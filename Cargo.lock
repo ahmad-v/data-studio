@@ -658,6 +658,7 @@ dependencies = [
  "localwright-core",
  "localwright-ui",
  "parquet",
+ "serde",
  "serde_json",
  "tempfile",
  "zip",

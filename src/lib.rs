@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod project;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx};
@@ -7,6 +8,7 @@ use parquet::{
     arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
     basic::Compression,
 };
+use project::{Project, Step};
 use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
  Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
@@ -15,6 +17,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Stable ascending text order. Optional CSV, TSV or Parquet output."},
  Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
  Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
+ Operation{id:"run-project",label:"Run data project",hint:"Enter the project JSON path. Preview a local table or write it to a new CSV, TSV or Parquet file."},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
@@ -232,10 +235,14 @@ fn column(t: &Table, name: &str) -> Result<usize> {
         .position(|h| h == name)
         .ok_or_else(|| Error::input("Column not found"))
 }
-fn select_columns(table: Table, parameter: &str, job: &Job) -> Result<Table> {
+fn select_columns<'a>(
+    table: Table,
+    names: impl IntoIterator<Item = &'a str>,
+    job: &Job,
+) -> Result<Table> {
     let mut seen = std::collections::HashSet::new();
     let mut columns = Vec::new();
-    for name in parameter.split(',') {
+    for name in names {
         let index = column(&table, name)?;
         if !seen.insert(index) {
             return Err(Error::input("A column was selected more than once"));
@@ -270,6 +277,73 @@ fn deduplicate(rows: Vec<Vec<String>>, job: &Job) -> Result<Vec<Vec<String>>> {
         .zip(keep)
         .filter_map(|(row, keep)| keep.then_some(row))
         .collect())
+}
+
+const MASK_WARNING: &str = "Only selected columns' nonempty text cells were masked. Headers, blank patterns and other columns can still identify people or reveal sensitive information.";
+
+fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
+    match step {
+        Step::SelectColumns { columns } => {
+            return select_columns(table, columns.iter().map(String::as_str), job)
+        }
+        Step::Filter {
+            column: name,
+            value,
+        } => {
+            let index = column(&table, &name)?;
+            let mut kept = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if row[index] == value {
+                    kept.push(row);
+                }
+            }
+            table.rows = kept;
+        }
+        Step::Sort { column: name } => {
+            let index = column(&table, &name)?;
+            job.check()?;
+            table.rows.sort_by(|a, b| a[index].cmp(&b[index]));
+            job.check()?;
+        }
+        Step::Deduplicate {} => table.rows = deduplicate(table.rows, job)?,
+        Step::MaskColumn { column: name } => {
+            let index = column(&table, &name)?;
+            for row in &mut table.rows {
+                job.check()?;
+                if !row[index].is_empty() {
+                    row[index] = "[MASKED]".into();
+                }
+            }
+        }
+    }
+    Ok(table)
+}
+
+fn request_step(operation: &str, parameter: &str) -> Result<Option<Step>> {
+    let step = match operation {
+        "select-columns" => Step::SelectColumns {
+            columns: parameter.split(',').map(str::to_owned).collect(),
+        },
+        "filter" => {
+            let (name, value) = parameter
+                .split_once('=')
+                .ok_or_else(|| Error::input("Expected column=value"))?;
+            Step::Filter {
+                column: name.into(),
+                value: value.into(),
+            }
+        }
+        "sort" => Step::Sort {
+            column: parameter.into(),
+        },
+        "deduplicate" => Step::Deduplicate {},
+        "mask-column" => Step::MaskColumn {
+            column: parameter.into(),
+        },
+        _ => return Ok(None),
+    };
+    Ok(Some(step))
 }
 
 fn value_counts(table: &Table, index: usize, job: &Job) -> Result<String> {
@@ -485,8 +559,28 @@ fn export(t: &Table, p: &Path, j: &Job) -> Result<()> {
     }
 }
 pub fn handle(r: Request, j: Job) -> Result<Outcome> {
-    let sheet = (matches!(r.operation.as_str(), "preview" | "export") && !r.parameter.is_empty())
-        .then_some(r.parameter.as_str());
+    let project = if r.operation == "run-project" {
+        Some(Project::open(Path::new(&r.parameter))?)
+    } else {
+        None
+    };
+    let sheet = match &project {
+        Some(project) => project.worksheet.as_deref(),
+        None => (matches!(r.operation.as_str(), "preview" | "export") && !r.parameter.is_empty())
+            .then_some(r.parameter.as_str()),
+    };
+    if project.is_some()
+        && sheet.is_some()
+        && !r
+            .input
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("xlsx"))
+    {
+        return Err(Error::input(
+            "Project worksheet selection requires XLSX input",
+        ));
+    }
     let mut t = load(&r.input, sheet, &j)?;
     let mut written = None;
     let mut warnings = vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()];
@@ -532,35 +626,19 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             )
         }
         "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate"
-        | "mask-column" => {
-            match r.operation.as_str() {
-                "select-columns" => t = select_columns(t, &r.parameter, &j)?,
-                "filter" => {
-                    let (name, value) = r
-                        .parameter
-                        .split_once('=')
-                        .ok_or_else(|| Error::input("Expected column=value"))?;
-                    let index = column(&t, name)?;
-                    t.rows.retain(|row| row[index] == value);
+        | "mask-column" | "run-project" => {
+            if let Some(project) = project {
+                let (result, steps, masked) = project.run(t, &j)?;
+                t = result;
+                warnings.push(format!("Applied {steps} declarative project steps."));
+                if masked {
+                    warnings.push(MASK_WARNING.into());
                 }
-                "sort" => {
-                    let index = column(&t, &r.parameter)?;
-                    j.check()?;
-                    t.rows.sort_by(|a, b| a[index].cmp(&b[index]));
-                    j.check()?;
+            } else if let Some(step) = request_step(&r.operation, &r.parameter)? {
+                if matches!(step, Step::MaskColumn { .. }) {
+                    warnings.push(MASK_WARNING.into());
                 }
-                "mask-column" => {
-                    let index = column(&t, &r.parameter)?;
-                    for row in &mut t.rows {
-                        j.check()?;
-                        if !row[index].is_empty() {
-                            row[index] = "[MASKED]".into();
-                        }
-                    }
-                    warnings.push("Only the selected column's nonempty text cells were masked. Headers, blank patterns and other columns can still identify people or reveal sensitive information.".into());
-                }
-                "deduplicate" => t.rows = deduplicate(t.rows, &j)?,
-                _ => {}
+                t = apply_step(t, step, &j)?;
             }
             if r.operation == "export"
                 || (r.operation != "preview" && !r.output.as_os_str().is_empty())
@@ -637,10 +715,69 @@ mod tests {
             vec![vec!["x".into(), "y".into()]],
         )
         .unwrap();
-        let reordered = select_columns(table, "two,one", &Job::new()).unwrap();
+        let reordered = select_columns(table, ["two", "one"], &Job::new()).unwrap();
         assert_eq!(reordered.headers, ["two", "one"]);
         assert_eq!(reordered.rows[0], ["y", "x"]);
-        assert!(select_columns(reordered, "two,two", &Job::new()).is_err());
+        assert!(select_columns(reordered, ["two", "two"], &Job::new()).is_err());
+    }
+
+    #[test]
+    fn project_runs_ordered_steps_and_withholds_partial_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let output = dir.path().join("project.tsv");
+        let path = dir.path().join("pipeline.json");
+        std::fs::write(
+            &input,
+            "name,group,id\nAda,a,2\nRen,a,1\nAda,a,2\nKai,b,3\n",
+        )
+        .unwrap();
+        let request = Request {
+            operation: "run-project".into(),
+            input: input.clone(),
+            output: output.clone(),
+            parameter: path.to_str().unwrap().into(),
+            ..Request::default()
+        };
+        std::fs::write(
+            &path,
+            r#"{
+            "schema_version": 1,
+            "steps": [
+                {"operation":"filter","column":"group","value":"a"},
+                {"operation":"sort","column":"unknown"}
+            ]
+        }"#,
+        )
+        .unwrap();
+        assert!(handle(request.clone(), Job::new())
+            .unwrap_err()
+            .message
+            .contains("Project step 2"));
+        assert!(!output.exists());
+        std::fs::write(
+            &path,
+            r#"{
+            "schema_version": 1,
+            "steps": [
+                {"operation":"filter","column":"group","value":"a"},
+                {"operation":"deduplicate"},
+                {"operation":"sort","column":"id"},
+                {"operation":"mask-column","column":"name"},
+                {"operation":"select-columns","columns":["id","name"]}
+            ]
+        }"#,
+        )
+        .unwrap();
+        let result = handle(request, Job::new()).unwrap();
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Applied 5")));
+        assert_eq!(
+            std::fs::read_to_string(output).unwrap(),
+            "id\tname\n1\t[MASKED]\n2\t[MASKED]\n"
+        );
     }
 
     #[test]
