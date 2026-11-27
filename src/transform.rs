@@ -143,6 +143,24 @@ fn fill_direction(table: &mut Table, column_name: &str, forward: bool, job: &Job
     Ok(())
 }
 
+fn filter_numeric(
+    table: &mut Table,
+    column_name: &str,
+    job: &Job,
+    predicate: impl Fn(f64) -> bool,
+) -> Result<()> {
+    let index = crate::column(table, column_name)?;
+    let mut rows = Vec::new();
+    for row in std::mem::take(&mut table.rows) {
+        job.check()?;
+        if numeric_cell(&row[index])?.is_some_and(&predicate) {
+            rows.push(row);
+        }
+    }
+    table.rows = rows;
+    Ok(())
+}
+
 pub(crate) fn apply(mut table: Table, step: Step, job: &Job) -> Result<Table> {
     match step {
         Step::RecodeValues { column, mapping } => {
@@ -650,6 +668,44 @@ pub(crate) fn apply(mut table: Table, step: Step, job: &Job) -> Result<Table> {
                 }
             }
             table.rows = rows;
+        }
+        Step::FilterNumberGreater { column, value } => {
+            if !value.is_finite() {
+                return Err(Error::input("Numeric filter threshold must be finite"));
+            }
+            filter_numeric(&mut table, &column, job, |number| number > value)?;
+        }
+        Step::FilterNumberGreaterEqual { column, value } => {
+            if !value.is_finite() {
+                return Err(Error::input("Numeric filter threshold must be finite"));
+            }
+            filter_numeric(&mut table, &column, job, |number| number >= value)?;
+        }
+        Step::FilterNumberLess { column, value } => {
+            if !value.is_finite() {
+                return Err(Error::input("Numeric filter threshold must be finite"));
+            }
+            filter_numeric(&mut table, &column, job, |number| number < value)?;
+        }
+        Step::FilterNumberLessEqual { column, value } => {
+            if !value.is_finite() {
+                return Err(Error::input("Numeric filter threshold must be finite"));
+            }
+            filter_numeric(&mut table, &column, job, |number| number <= value)?;
+        }
+        Step::FilterNumberBetween {
+            column,
+            lower,
+            upper,
+        } => {
+            if !lower.is_finite() || !upper.is_finite() || lower > upper {
+                return Err(Error::input(
+                    "Numeric filter bounds must be finite and lower must not exceed upper",
+                ));
+            }
+            filter_numeric(&mut table, &column, job, |value| {
+                value >= lower && value <= upper
+            })?;
         }
         Step::ReplaceLiteral {
             column,

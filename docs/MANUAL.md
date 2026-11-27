@@ -17,6 +17,8 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `filter-not-equal`: JSON parameter `{"column":"status","value":"closed"}` retains rows that differ by exact text.
 - `filter-contains-insensitive`: JSON parameter `{"column":"name","value":"ada"}` compares Unicode lowercase text; it is not locale-specific collation or full linguistic case-folding.
 - `filter-starts-with` and `filter-ends-with`: JSON parameters name a column and a nonempty literal prefix or suffix. Matching is case-sensitive.
+- `filter-number-greater`, `filter-number-greater-equal`, `filter-number-less`, and `filter-number-less-equal`: `{"column":"score","value":10}` keeps finite numeric values by the named strict or inclusive comparison. Blank cells are excluded; malformed nonblank values fail the operation.
+- `filter-number-between`: `{"column":"score","lower":10,"upper":20}` keeps finite numeric values within inclusive bounds. Bounds must be finite and ordered; blank cells are excluded and malformed nonblank values fail.
 - `replace-literal`: JSON parameter `{"column":"notes","find":"old","replace":"new"}` replaces all non-overlapping literal matches in one column. Empty find strings are rejected and the 32 MiB transformed-text bound applies before replacement.
 - `drop-rows-any-missing`: Removes each row containing any empty or whitespace-only cell.
 - `fill-forward` and `fill-backward`: JSON parameter `{"column":"group"}` fills blanks from the nearest preceding or following nonblank cell. Leading or trailing blanks without a source value remain blank.

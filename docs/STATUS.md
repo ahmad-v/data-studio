@@ -62,6 +62,11 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | fill-backward | Fill blanks from nearest following value | Linux route and project fixtures passed; hosted matrix pending |
 | drop-empty-columns | Remove all-blank columns, retaining at least one | Linux route and project fixtures passed; hosted matrix pending |
 | reverse-rows | Reverse table row order | Linux route and project fixtures passed; hosted matrix pending |
+| filter-number-greater | Keep finite numeric values strictly above a threshold | Linux route and project fixtures passed; hosted matrix pending |
+| filter-number-greater-equal | Keep finite numeric values at or above a threshold | Linux route and project fixtures passed; hosted matrix pending |
+| filter-number-less | Keep finite numeric values strictly below a threshold | Linux route and project fixtures passed; hosted matrix pending |
+| filter-number-less-equal | Keep finite numeric values at or below a threshold | Linux route and project fixtures passed; hosted matrix pending |
+| filter-number-between | Keep finite numeric values within inclusive bounds | Linux route and project fixtures passed; hosted matrix pending |
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
 | correlation | Pearson coefficient on complete numeric pairs | Linux fixture-tested |

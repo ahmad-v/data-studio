@@ -132,6 +132,27 @@ pub enum Step {
         column: String,
         value: String,
     },
+    FilterNumberGreater {
+        column: String,
+        value: f64,
+    },
+    FilterNumberGreaterEqual {
+        column: String,
+        value: f64,
+    },
+    FilterNumberLess {
+        column: String,
+        value: f64,
+    },
+    FilterNumberLessEqual {
+        column: String,
+        value: f64,
+    },
+    FilterNumberBetween {
+        column: String,
+        lower: f64,
+        upper: f64,
+    },
     ReplaceLiteral {
         column: String,
         find: String,

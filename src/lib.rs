@@ -67,6 +67,11 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"filter-contains-insensitive",label:"Filter contains (case-insensitive)",hint:r#"Parameter JSON: {"column":"name","value":"ada"}. Uses Unicode lowercase matching; search text cannot be empty."#},
  Operation{id:"filter-starts-with",label:"Filter starts with",hint:r#"Parameter JSON: {"column":"code","value":"AB"}. Case-sensitive literal prefix match."#},
  Operation{id:"filter-ends-with",label:"Filter ends with",hint:r#"Parameter JSON: {"column":"file","value":".csv"}. Case-sensitive literal suffix match."#},
+ Operation{id:"filter-number-greater",label:"Filter number greater than",hint:r#"Parameter JSON: {"column":"score","value":10}. Finite numeric cells only; blanks are excluded."#},
+ Operation{id:"filter-number-greater-equal",label:"Filter number greater than or equal",hint:r#"Parameter JSON: {"column":"score","value":10}. Inclusive finite numeric threshold; blanks are excluded."#},
+ Operation{id:"filter-number-less",label:"Filter number less than",hint:r#"Parameter JSON: {"column":"score","value":10}. Finite numeric cells only; blanks are excluded."#},
+ Operation{id:"filter-number-less-equal",label:"Filter number less than or equal",hint:r#"Parameter JSON: {"column":"score","value":10}. Inclusive finite numeric threshold; blanks are excluded."#},
+ Operation{id:"filter-number-between",label:"Filter number between",hint:r#"Parameter JSON: {"column":"score","lower":10,"upper":20}. Inclusive finite bounds; lower must not exceed upper."#},
  Operation{id:"replace-literal",label:"Replace literal text",hint:r#"Parameter JSON: {"column":"notes","find":"old","replace":"new"}. Replaces all non-overlapping literal matches in one column."#},
  Operation{id:"drop-rows-any-missing",label:"Drop rows with any missing cells",hint:"Removes a row when any cell is blank or whitespace-only."},
  Operation{id:"fill-forward",label:"Fill forward",hint:r#"Parameter JSON: {"column":"group"}. Fills blank cells from the nearest preceding nonblank value; leading blanks remain blank."#},
@@ -360,6 +365,11 @@ fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
         | Step::FilterContainsInsensitive { .. }
         | Step::FilterStartsWith { .. }
         | Step::FilterEndsWith { .. }
+        | Step::FilterNumberGreater { .. }
+        | Step::FilterNumberGreaterEqual { .. }
+        | Step::FilterNumberLess { .. }
+        | Step::FilterNumberLessEqual { .. }
+        | Step::FilterNumberBetween { .. }
         | Step::ReplaceLiteral { .. }
         | Step::DropRowsAnyMissing { .. }
         | Step::FillForward { .. }
@@ -482,6 +492,11 @@ fn request_step(operation: &str, parameter: &str) -> Result<Option<Step>> {
             | "filter-contains-insensitive"
             | "filter-starts-with"
             | "filter-ends-with"
+            | "filter-number-greater"
+            | "filter-number-greater-equal"
+            | "filter-number-less"
+            | "filter-number-less-equal"
+            | "filter-number-between"
             | "replace-literal"
             | "fill-forward"
             | "fill-backward"
@@ -1071,6 +1086,11 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         | "filter-contains-insensitive"
         | "filter-starts-with"
         | "filter-ends-with"
+        | "filter-number-greater"
+        | "filter-number-greater-equal"
+        | "filter-number-less"
+        | "filter-number-less-equal"
+        | "filter-number-between"
         | "replace-literal"
         | "drop-rows-any-missing"
         | "fill-forward"
