@@ -1828,13 +1828,24 @@ mod tests {
         assert_eq!(schema.field(1).metadata()["localwright.label"], "Response");
         assert_eq!(schema.field(1).metadata()["localwright.unit"], "points");
         assert_eq!(schema.field(2).name(), "right.site");
-        assert_eq!(schema.field(2).data_type(), &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)));
+        assert_eq!(
+            schema.field(2).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
         let mut batches = reader.build().unwrap();
         let batch = batches.next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 3);
-        let ids = batch.column(0).as_any().downcast_ref::<arrow_array::Int64Array>().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
         assert_eq!(ids.values(), &[2, 2, 3]);
-        let scores = batch.column(1).as_any().downcast_ref::<arrow_array::Float64Array>().unwrap();
+        let scores = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::Float64Array>()
+            .unwrap();
         assert_eq!(scores.value(0), 1.5);
         assert_eq!(scores.value(1), 1.5);
         assert!(scores.is_null(2));

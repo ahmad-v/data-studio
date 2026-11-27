@@ -286,54 +286,64 @@ impl Project {
         for (index, step) in self.steps.into_iter().enumerate() {
             job.check()?;
             let result = match step {
-                Step::Filter { column, value } => table.filter_equal(&column, &value, job),
-                Step::FilterCompare {
-                    column,
-                    comparison,
-                    value,
-                } => table.filter_compare(&column, comparison, &value, job),
-                Step::DeriveNumericColumn {
-                    name,
-                    expression,
-                    label,
-                    unit,
-                } => table.derive_numeric_column(
-                    name,
-                    &expression,
-                    ColumnMetadata { label, unit },
-                    job,
-                ),
-                Step::RenameColumn { column, name } => table.rename_column(&column, name),
                 Step::TypedInnerJoin {
                     right_path,
                     left_key,
                     right_key,
                     right_schema,
                 } => {
-                    (|| {
-                        let path = if right_path.is_absolute() {
-                            right_path
-                        } else {
-                            self.project_directory.join(right_path)
-                        };
-                        let source = load(&path, None, job)?;
-                        let right = TypedTable::infer(&source, right_schema, job)?;
-                        table = table.inner_join(right, &left_key, &right_key, job)?;
-                        Ok(())
-                    })()
+                    let path = if right_path.is_absolute() {
+                        right_path
+                    } else {
+                        self.project_directory.join(right_path)
+                    };
+                    match load(&path, None, job) {
+                        Ok(source) => match TypedTable::infer(&source, right_schema, job) {
+                            Ok(right) => table.inner_join(right, &left_key, &right_key, job),
+                            Err(error) => Err(error),
+                        },
+                        Err(error) => Err(error),
+                    }
                 }
-                Step::SelectColumns { columns } => table.select_columns(&columns, job),
-                Step::Sort { column } => table.sort_by(&column, job),
-                Step::DropMissing { column } => table.drop_missing(&column, job),
-                Step::DropRowsAnyMissing {} => table.drop_rows_any_missing(job),
-                Step::HeadRows { rows } => table.head_rows(rows, job),
-                Step::TailRows { rows } => table.tail_rows(rows, job),
-                Step::ReverseRows {} => table.reverse_rows(job),
-                _ => Err(Error::input(
-                    "This operation is not supported in a typed pipeline yet; use filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
-                )),
+                step => {
+                    let result = match step {
+                        Step::Filter { column, value } => {
+                            table.filter_equal(&column, &value, job)
+                        }
+                        Step::FilterCompare {
+                            column,
+                            comparison,
+                            value,
+                        } => table.filter_compare(&column, comparison, &value, job),
+                        Step::DeriveNumericColumn {
+                            name,
+                            expression,
+                            label,
+                            unit,
+                        } => table.derive_numeric_column(
+                            name,
+                            &expression,
+                            ColumnMetadata { label, unit },
+                            job,
+                        ),
+                        Step::RenameColumn { column, name } => {
+                            table.rename_column(&column, name)
+                        }
+                        Step::SelectColumns { columns } => table.select_columns(&columns, job),
+                        Step::Sort { column } => table.sort_by(&column, job),
+                        Step::DropMissing { column } => table.drop_missing(&column, job),
+                        Step::DropRowsAnyMissing {} => table.drop_rows_any_missing(job),
+                        Step::HeadRows { rows } => table.head_rows(rows, job),
+                        Step::TailRows { rows } => table.tail_rows(rows, job),
+                        Step::ReverseRows {} => table.reverse_rows(job),
+                        _ => Err(Error::input(
+                            "This operation is not supported in a typed pipeline yet; use filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
+                        )),
+                    };
+                    result.map(|()| table)
+                }
             };
-            result.map_err(|error| {
+            table = result.map_err(|error| {
                 Error::new(
                     error.kind,
                     format!("Typed project step {}: {}", index + 1, error.message),

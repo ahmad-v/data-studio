@@ -225,12 +225,20 @@ fn typed_join_key(column: &Column, value: &Scalar) -> Result<Option<String>> {
         Scalar::Boolean(value) => format!("b:{value}"),
         Scalar::Int64(value) => format!("i:{value}"),
         Scalar::UInt64(value) => format!("u:{value}"),
-        Scalar::Float64(value) => format!("f:{:016x}", if *value == 0.0 { 0 } else { value.to_bits() }),
+        Scalar::Float64(value) => {
+            format!("f:{:016x}", if *value == 0.0 { 0 } else { value.to_bits() })
+        }
         Scalar::Date(value) => format!("d:{}", value.days_since_epoch()),
         Scalar::Time(value) => format!("t:{}", value.nanoseconds_since_midnight()),
-        Scalar::DateTime(value) => format!("z:{}:{}", value.offset_minutes.is_some(), datetime_order_value(*value)),
+        Scalar::DateTime(value) => format!(
+            "z:{}:{}",
+            value.offset_minutes.is_some(),
+            datetime_order_value(*value)
+        ),
         Scalar::Categorical(index) => {
-            let label = column.categories.get(*index as usize)
+            let label = column
+                .categories
+                .get(*index as usize)
                 .ok_or_else(|| Error::input("Typed categorical index is outside its dictionary"))?;
             format!("c:{}", serde_json::to_string(label)?)
         }
@@ -766,7 +774,12 @@ impl TypedTable {
     pub(crate) fn rename_column(&mut self, old: &str, new: String) -> Result<()> {
         let index = self.column_index(old)?;
         validate_column_name(&new)?;
-        if self.columns.iter().enumerate().any(|(i, column)| i != index && column.name == new) {
+        if self
+            .columns
+            .iter()
+            .enumerate()
+            .any(|(i, column)| i != index && column.name == new)
+        {
             return Err(Error::input("Renamed column must have a unique name"));
         }
         self.columns[index].name = new;
@@ -786,7 +799,9 @@ impl TypedTable {
         let left_column = &self.columns[left_index];
         let right_column = &right.columns[right_index];
         if left_column.kind != right_column.kind {
-            return Err(Error::input("Join keys must have the same typed column type"));
+            return Err(Error::input(
+                "Join keys must have the same typed column type",
+            ));
         }
         if left_column.kind == ColumnType::DateTime {
             validate_datetime_ordering(left_column)?;
@@ -800,19 +815,30 @@ impl TypedTable {
                 _ => None,
             });
             if left_aware.is_some() && right_aware.is_some() && left_aware != right_aware {
-                return Err(Error::input("Join datetime keys have different timezone semantics"));
+                return Err(Error::input(
+                    "Join datetime keys have different timezone semantics",
+                ));
             }
         }
 
-        let mut names = self.columns.iter().map(|column| column.name.clone()).collect::<Vec<_>>();
-        let right_columns = right.columns.iter().enumerate()
+        let mut names = self
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+        let right_columns = right
+            .columns
+            .iter()
+            .enumerate()
             .filter(|(index, _)| *index != right_index)
             .map(|(_, column)| column)
             .collect::<Vec<_>>();
         for column in &right_columns {
             let name = format!("right.{}", column.name);
             if names.contains(&name) {
-                return Err(Error::input(format!("Join result column {name:?} conflicts with an existing column")));
+                return Err(Error::input(format!(
+                    "Join result column {name:?} conflicts with an existing column"
+                )));
             }
             validate_column_name(&name)?;
             names.push(name);
@@ -835,7 +861,10 @@ impl TypedTable {
             if let Some(key) = typed_join_key(left_column, value)? {
                 if let Some(matches) = index.get(&key) {
                     if pairs.len().saturating_add(matches.len()) > max_rows {
-                        return Err(Error::new(ErrorKind::Limit, "Typed join exceeds the cell limit"));
+                        return Err(Error::new(
+                            ErrorKind::Limit,
+                            "Typed join exceeds the cell limit",
+                        ));
                     }
                     pairs.extend(matches.iter().map(|right_row| (left_row, *right_row)));
                 }
@@ -844,23 +873,41 @@ impl TypedTable {
 
         let left_column_count = self.columns.len();
         let mut output_columns = Vec::with_capacity(names.len());
-        for (column, name) in self.columns.drain(..).zip(names.iter().take(left_column_count)) {
+        for (column, name) in self
+            .columns
+            .drain(..)
+            .zip(names.iter().take(left_column_count))
+        {
             let mut values = Vec::with_capacity(pairs.len());
             for (left_row, _) in &pairs {
                 job.check()?;
                 values.push(column.values[*left_row].clone());
             }
-            output_columns.push(Column { name: name.clone(), values, ..column });
+            output_columns.push(Column {
+                name: name.clone(),
+                values,
+                ..column
+            });
         }
-        for (column, name) in right_columns.into_iter().zip(names.iter().skip(output_columns.len())) {
+        for (column, name) in right_columns
+            .into_iter()
+            .zip(names.iter().skip(output_columns.len()))
+        {
             let mut values = Vec::with_capacity(pairs.len());
             for (_, right_row) in &pairs {
                 job.check()?;
                 values.push(column.values[*right_row].clone());
             }
-            output_columns.push(Column { name: name.clone(), values, ..(*column).clone() });
+            output_columns.push(Column {
+                name: name.clone(),
+                values,
+                ..(*column).clone()
+            });
         }
-        Ok(Self { columns: output_columns, rows: pairs.len() })
+        Ok(Self {
+            columns: output_columns,
+            rows: pairs.len(),
+        })
     }
 
     /// Stable, ascending sort using the typed value; nulls always sort after values.
@@ -1694,17 +1741,20 @@ mod tests {
             metadata: BTreeMap::new(),
         };
         let left = TypedTable::infer(&left_source, categorical("key"), &Job::new()).unwrap();
-        let right = TypedTable::infer(
-            &right_source,
-            categorical("lookup"),
-            &Job::new(),
-        )
-        .unwrap();
-        let joined = left.inner_join(right, "key", "lookup", &Job::new()).unwrap();
+        let right = TypedTable::infer(&right_source, categorical("lookup"), &Job::new()).unwrap();
+        let joined = left
+            .inner_join(right, "key", "lookup", &Job::new())
+            .unwrap();
         assert_eq!(joined.rows, 2);
         assert_eq!(joined.columns[0].categories, ["a", "b"]);
-        assert_eq!(joined.columns[0].values, [Scalar::Categorical(0), Scalar::Categorical(1)]);
-        assert_eq!(joined.columns[1].values, [Scalar::String("A".into()), Scalar::String("B".into())]);
+        assert_eq!(
+            joined.columns[0].values,
+            [Scalar::Categorical(0), Scalar::Categorical(1)]
+        );
+        assert_eq!(
+            joined.columns[1].values,
+            [Scalar::String("A".into()), Scalar::String("B".into())]
+        );
     }
 
     #[test]
