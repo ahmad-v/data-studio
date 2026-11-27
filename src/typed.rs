@@ -10,6 +10,7 @@ use parquet::arrow::ArrowWriter;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
+    hash::{BuildHasher, Hash, Hasher},
     path::Path,
     sync::Arc,
 };
@@ -78,6 +79,15 @@ pub(crate) enum TypedComparison {
     Lte,
     Gt,
     Gte,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TextMatch {
+    Contains,
+    NotContains,
+    ContainsInsensitive,
+    StartsWith,
+    EndsWith,
 }
 
 /// Bounded, declarative arithmetic expression used by typed project pipelines.
@@ -885,6 +895,113 @@ impl TypedTable {
         self.filter_compare(name, TypedComparison::Eq, literal, job)
     }
 
+    /// Filter a typed column using a case-sensitive or insensitive text predicate.
+    /// Values are formatted only for matching; the retained scalar values and schema
+    /// remain typed and unchanged.
+    pub(crate) fn filter_text(
+        &mut self,
+        name: &str,
+        needle: &str,
+        mode: TextMatch,
+        job: &Job,
+    ) -> Result<()> {
+        if needle.is_empty() {
+            return Err(Error::input("Text filter value must not be empty"));
+        }
+        if needle.len() > MAX_EXAMPLE_CHARS * 8 {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Text filter exceeds the 1 KiB limit",
+            ));
+        }
+        let index = self.column_index(name)?;
+        let column = &self.columns[index];
+        let needle_folded = needle.to_lowercase();
+        let mut keep = Vec::with_capacity(self.rows);
+        for value in &column.values {
+            job.check()?;
+            let text = match value {
+                Scalar::Null => {
+                    keep.push(false);
+                    continue;
+                }
+                Scalar::Categorical(id) => column
+                    .categories
+                    .get(*id as usize)
+                    .ok_or_else(|| Error::input("Invalid categorical value"))?
+                    .clone(),
+                value => scalar_text(value, &column.categories, None),
+            };
+            let matched = match mode {
+                TextMatch::Contains => text.contains(needle),
+                TextMatch::NotContains => !text.contains(needle),
+                TextMatch::ContainsInsensitive => text.to_lowercase().contains(&needle_folded),
+                TextMatch::StartsWith => text.starts_with(needle),
+                TextMatch::EndsWith => text.ends_with(needle),
+            };
+            keep.push(matched);
+        }
+        self.retain_rows(&keep, job)
+    }
+
+    /// Filter a numeric column by a finite real threshold. Integer columns are
+    /// rejected outside the exact f64 integer range rather than silently
+    /// rounding values during comparison.
+    pub(crate) fn filter_number(
+        &mut self,
+        name: &str,
+        comparison: TypedComparison,
+        threshold: f64,
+        job: &Job,
+    ) -> Result<()> {
+        if !threshold.is_finite() {
+            return Err(Error::input("Numeric filter threshold must be finite"));
+        }
+        let index = self.column_index(name)?;
+        let column = &self.columns[index];
+        if !matches!(
+            column.kind,
+            ColumnType::Int64 | ColumnType::UInt64 | ColumnType::Float64
+        ) {
+            return Err(Error::input(format!(
+                "Numeric filter column {name:?} must have an integer or floating-point type"
+            )));
+        }
+        let mut keep = Vec::with_capacity(self.rows);
+        for value in &column.values {
+            job.check()?;
+            let ordering = match value {
+                Scalar::Null => None,
+                Scalar::Float64(value) => value.partial_cmp(&threshold),
+                Scalar::Int64(value) if value.unsigned_abs() <= MAX_EXACT_FLOAT64_INTEGER => {
+                    (*value as f64).partial_cmp(&threshold)
+                }
+                Scalar::UInt64(value) if *value <= MAX_EXACT_FLOAT64_INTEGER => {
+                    (*value as f64).partial_cmp(&threshold)
+                }
+                Scalar::Int64(_) | Scalar::UInt64(_) => {
+                    return Err(Error::input(format!(
+                        "Numeric comparison for {name:?} exceeds the exact floating-point range"
+                    )))
+                }
+                _ => {
+                    return Err(Error::input(
+                        "Typed numeric column contains an invalid value",
+                    ))
+                }
+            };
+            keep.push(ordering.is_some_and(|ordering| match comparison {
+                TypedComparison::Eq => ordering == std::cmp::Ordering::Equal,
+                TypedComparison::Ne => ordering != std::cmp::Ordering::Equal,
+                TypedComparison::Lt => ordering == std::cmp::Ordering::Less,
+                TypedComparison::Lte => ordering != std::cmp::Ordering::Greater,
+                TypedComparison::Gt => ordering == std::cmp::Ordering::Greater,
+                TypedComparison::Gte => ordering != std::cmp::Ordering::Less,
+            }));
+        }
+        self.retain_rows(&keep, job)
+    }
+
     /// Keep rows by a type-aware literal comparison. Nulls match only `eq` with a null literal.
     pub(crate) fn filter_compare(
         &mut self,
@@ -1336,17 +1453,75 @@ impl TypedTable {
     }
 
     pub(crate) fn head_rows(&mut self, count: usize, job: &Job) -> Result<()> {
+        if count > MAX_CELLS {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Row window exceeds the 500,000-row limit",
+            ));
+        }
         let count = count.min(self.rows);
         self.reorder_rows(&(0..count).collect::<Vec<_>>(), job)
     }
 
     pub(crate) fn tail_rows(&mut self, count: usize, job: &Job) -> Result<()> {
+        if count > MAX_CELLS {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Row window exceeds the 500,000-row limit",
+            ));
+        }
         let start = self.rows.saturating_sub(count);
         self.reorder_rows(&(start..self.rows).collect::<Vec<_>>(), job)
     }
 
     pub(crate) fn reverse_rows(&mut self, job: &Job) -> Result<()> {
         self.reorder_rows(&(0..self.rows).rev().collect::<Vec<_>>(), job)
+    }
+
+    /// Keep the first occurrence of each typed key. Nulls compare equal for
+    /// deduplication; categorical values compare by label, not dictionary id.
+    pub(crate) fn deduplicate_rows(&mut self, names: Option<&[String]>, job: &Job) -> Result<()> {
+        let selected = match names {
+            Some([]) => {
+                return Err(Error::input("Select at least one duplicate key column"));
+            }
+            Some(names) => {
+                let mut indexes = Vec::with_capacity(names.len());
+                for name in names {
+                    let index = self.column_index(name)?;
+                    if indexes.contains(&index) {
+                        return Err(Error::input("A duplicate key column was selected twice"));
+                    }
+                    indexes.push(index);
+                }
+                indexes
+            }
+            None => (0..self.columns.len()).collect(),
+        };
+        let mut buckets = HashMap::<u64, Vec<usize>>::new();
+        let hash_builder = std::collections::hash_map::RandomState::new();
+        let mut keep = vec![false; self.rows];
+        for (row, keep_row) in keep.iter_mut().enumerate() {
+            job.check()?;
+            let mut hasher = hash_builder.build_hasher();
+            for &column_index in &selected {
+                let column = &self.columns[column_index];
+                typed_join_key(column, &column.values[row])?.hash(&mut hasher);
+            }
+            let hash = hasher.finish();
+            let candidates = buckets.entry(hash).or_default();
+            let duplicate = candidates.iter().copied().any(|candidate| {
+                selected.iter().all(|&column_index| {
+                    self.columns[column_index].values[row]
+                        == self.columns[column_index].values[candidate]
+                })
+            });
+            if !duplicate {
+                *keep_row = true;
+                candidates.push(row);
+            }
+        }
+        self.retain_rows(&keep, job)
     }
 
     fn column_index(&self, name: &str) -> Result<usize> {
@@ -1449,21 +1624,27 @@ impl TypedTable {
             .map(|row| {
                 self.columns
                     .iter()
-                    .map(|column| {
-                        (
-                            column.name.clone(),
-                            value_json(&column.values[row], &column.categories)
-                                .unwrap_or(serde_json::Value::Null),
-                        )
+                    .map(|column| match &column.values[row] {
+                        Scalar::String(value) => {
+                            column.raw_text[row].as_ref().unwrap_or(value).clone()
+                        }
+                        Scalar::Categorical(index) => column.raw_text[row]
+                            .as_ref()
+                            .or_else(|| column.categories.get(*index as usize))
+                            .cloned()
+                            .unwrap_or_default(),
+                        value => {
+                            scalar_text(value, &column.categories, column.raw_text[row].as_deref())
+                        }
                     })
-                    .collect::<serde_json::Map<_, _>>()
+                    .collect::<Vec<_>>()
             })
-            .map(serde_json::Value::Object)
             .collect::<Vec<_>>();
         serde_json::json!({
-            "schema": self.schema_report(),
             "rows": self.rows,
+            "headers": self.columns.iter().map(|column| &column.name).collect::<Vec<_>>(),
             "preview": preview,
+            "schema": self.schema_report(),
         })
     }
 
@@ -2287,6 +2468,53 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["two", "second", "first", "missing"]
         );
+    }
+
+    #[test]
+    fn typed_text_filters_preserve_schema_values_and_null_semantics() {
+        let source = table(
+            vec!["group", "score"],
+            vec![vec!["North", "1"], vec!["south", "2"], vec!["", "3"]],
+        );
+        let request = SchemaRequest {
+            overrides: BTreeMap::from([("group".into(), ColumnType::Categorical)]),
+            metadata: BTreeMap::new(),
+        };
+        let mut typed = TypedTable::infer(&source, request, &Job::new()).unwrap();
+        typed
+            .filter_text(
+                "group",
+                "NORTH",
+                TextMatch::ContainsInsensitive,
+                &Job::new(),
+            )
+            .unwrap();
+        assert_eq!(typed.rows, 1);
+        assert_eq!(typed.columns[0].kind, ColumnType::Categorical);
+        assert_eq!(typed.columns[0].categories[0], "North");
+        assert_eq!(typed.columns[0].values, [Scalar::Categorical(0)]);
+        assert_eq!(typed.columns[1].values, [Scalar::Int64(1)]);
+    }
+
+    #[test]
+    fn typed_deduplication_uses_types_nulls_and_first_row_order() {
+        let source = table(
+            vec!["key", "label"],
+            vec![
+                vec!["010", "first"],
+                vec!["10", "second"],
+                vec!["", "missing"],
+                vec![" ", "another missing"],
+            ],
+        );
+        let mut typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
+        typed
+            .deduplicate_rows(Some(&["key".into()]), &Job::new())
+            .unwrap();
+        assert_eq!(typed.rows, 2);
+        assert_eq!(typed.columns[0].values, [Scalar::Int64(10), Scalar::Null]);
+        assert_eq!(typed.columns[1].values[0], Scalar::String("first".into()));
+        assert_eq!(typed.columns[1].values[1], Scalar::String("missing".into()));
     }
 
     #[test]

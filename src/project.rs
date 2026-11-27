@@ -1,6 +1,6 @@
 use super::{
     apply_step,
-    typed::{ColumnMetadata, NumericExpr, SchemaRequest, TypedComparison, TypedTable},
+    typed::{ColumnMetadata, NumericExpr, SchemaRequest, TextMatch, TypedComparison, TypedTable},
     Table,
 };
 use localwright_core::{read_bounded, Error, Job, Result};
@@ -310,6 +310,24 @@ impl Project {
                             comparison,
                             value,
                         } => table.filter_compare(&column, comparison, &value, job),
+                        Step::FilterContains { column, value } => {
+                            table.filter_text(&column, &value, TextMatch::Contains, job)
+                        }
+                        Step::FilterNotContains { column, value } => {
+                            table.filter_text(&column, &value, TextMatch::NotContains, job)
+                        }
+                        Step::FilterContainsInsensitive { column, value } => table
+                            .filter_text(&column, &value, TextMatch::ContainsInsensitive, job),
+                        Step::FilterStartsWith { column, value } => {
+                            table.filter_text(&column, &value, TextMatch::StartsWith, job)
+                        }
+                        Step::FilterEndsWith { column, value } => {
+                            table.filter_text(&column, &value, TextMatch::EndsWith, job)
+                        }
+                        Step::Deduplicate {} => table.deduplicate_rows(None, job),
+                        Step::DropDuplicatesByColumns { columns } => {
+                            table.deduplicate_rows(Some(&columns), job)
+                        }
                         Step::DeriveNumericColumn {
                             name,
                             expression,

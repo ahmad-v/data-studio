@@ -4,7 +4,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 
 | Operation | Scope | Status |
 |---|---|---|
-| drop-missing | Drop rows missing a selected value | Linux fixture-tested |
+| drop-missing | Drop typed nulls from CSV/TSV and supported scalar Parquet routes | New regression fixture; hosted verification pending |
 | fill-missing | Fill blanks in a selected column | Linux fixture-tested |
 | rename-column | Typed CSV/TSV and supported flat Parquet rename; typed preview, CSV/TSV and Parquet output | Regression route added; new hosted verification pending |
 | select-columns | Typed CSV/TSV and supported flat Parquet selection; typed preview, CSV/TSV and Parquet output | Regression route added; new hosted verification pending |
@@ -12,9 +12,11 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | preview | CSV, TSV, named or first XLSX sheet, or supported flat scalar Parquet cast to text | Linux fixture-tested |
 | inspect-schema | Infer or explicitly validate a columnar schema; report types, nulls, categorical dictionary counts, labels and units without modifying input; CSV/TSV parses directly to typed columns | Linux unit and route fixtures passed; five-target hosted verification pending |
 | export-typed-parquet | Write a validated or inferred typed Arrow schema, including nulls, temporal types, category dictionaries and label/unit metadata | Linux round-trip/rejection fixtures passed; hosted native matrix pending |
-| filter | Type-aware equality for CSV/TSV and supported flat Parquet; typed preview and supported CSV/TSV/Parquet output | Regression route added; new hosted verification pending |
+| filter | Type-aware equality and inequality for CSV/TSV and supported flat Parquet; typed preview and supported CSV/TSV/Parquet output | Regression route added; hosted verification pending |
+| filter-number-* | Typed finite numeric comparisons and inclusive range; nulls excluded and unsafe integer precision rejected | Regression route added; hosted verification pending |
 | sort | Stable type-aware ascending sort, nulls last, for CSV/TSV and supported flat Parquet; typed preview and supported output | Regression route added; new hosted verification pending |
-| deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
+| head-rows / tail-rows / reverse-rows | Typed row selection and ordering for supported CSV/TSV and scalar Parquet | Regression route added; hosted verification pending |
+| deduplicate | Keep the first occurrence of each full row; common CSV/TSV/Parquet routes compare typed values and retain nulls | Legacy Linux fixture passed; typed regression added, hosted verification pending |
 | mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
 | inner-join | Bounded exact-text fallback plus typed key matching for CSV/TSV and supported scalar Parquet input, with typed Parquet output | Regression route added; new hosted verification pending |
 | left-join | Left outer join with duplicate-key expansion and blank-key nonmatching | Linux fixture-tested |
@@ -48,7 +50,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | filter-not-contains | Case-sensitive literal substring exclusion | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | head-rows | Keep first N rows in source order | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | tail-rows | Keep last N rows in source order | Linux route and versioned-project fixtures passed; hosted matrix pending |
-| drop-duplicates-by-columns | Keep first exact key occurrence in selected columns | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| drop-duplicates-by-columns | Keep first typed key occurrence in selected columns; null keys compare equal | Legacy Linux route and project fixtures passed; typed regression added, hosted verification pending |
 | add-index-column | Add sequential signed 64-bit row index | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | add-constant-column | Add literal text to every row | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | normalize-text | Trim, Unicode case change, or collapse whitespace | Linux route and versioned-project fixtures passed; hosted matrix pending |

@@ -1039,7 +1039,29 @@ fn try_typed_basic_operation(
 ) -> Result<Option<Outcome>> {
     if !matches!(
         operation,
-        "filter" | "sort" | "select-columns" | "rename-column" | "inner-join"
+        "filter"
+            | "filter-not-equal"
+            | "filter-number-greater"
+            | "filter-number-greater-equal"
+            | "filter-number-less"
+            | "filter-number-less-equal"
+            | "filter-number-between"
+            | "filter-contains"
+            | "filter-not-contains"
+            | "filter-contains-insensitive"
+            | "filter-starts-with"
+            | "filter-ends-with"
+            | "deduplicate"
+            | "drop-duplicates-by-columns"
+            | "sort"
+            | "select-columns"
+            | "rename-column"
+            | "drop-missing"
+            | "drop-rows-any-missing"
+            | "head-rows"
+            | "tail-rows"
+            | "reverse-rows"
+            | "inner-join"
     ) {
         return Ok(None);
     }
@@ -1091,9 +1113,59 @@ fn try_typed_basic_operation(
     } else {
         match step.expect("non-join operations have a parsed typed step") {
             Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
+            Step::FilterContains { column, value } => {
+                table.filter_text(&column, &value, typed::TextMatch::Contains, job)?
+            }
+            Step::FilterNotContains { column, value } => {
+                table.filter_text(&column, &value, typed::TextMatch::NotContains, job)?
+            }
+            Step::FilterContainsInsensitive { column, value } => {
+                table.filter_text(&column, &value, typed::TextMatch::ContainsInsensitive, job)?
+            }
+            Step::FilterStartsWith { column, value } => {
+                table.filter_text(&column, &value, typed::TextMatch::StartsWith, job)?
+            }
+            Step::FilterEndsWith { column, value } => {
+                table.filter_text(&column, &value, typed::TextMatch::EndsWith, job)?
+            }
+            Step::Deduplicate {} => table.deduplicate_rows(None, job)?,
+            Step::DropDuplicatesByColumns { columns } => {
+                table.deduplicate_rows(Some(&columns), job)?
+            }
+            Step::FilterNotEqual { column, value } => {
+                table.filter_compare(&column, typed::TypedComparison::Ne, &value, job)?
+            }
+            Step::FilterNumberGreater { column, value } => {
+                table.filter_number(&column, typed::TypedComparison::Gt, value, job)?
+            }
+            Step::FilterNumberGreaterEqual { column, value } => {
+                table.filter_number(&column, typed::TypedComparison::Gte, value, job)?
+            }
+            Step::FilterNumberLess { column, value } => {
+                table.filter_number(&column, typed::TypedComparison::Lt, value, job)?
+            }
+            Step::FilterNumberLessEqual { column, value } => {
+                table.filter_number(&column, typed::TypedComparison::Lte, value, job)?
+            }
+            Step::FilterNumberBetween {
+                column,
+                lower,
+                upper,
+            } => {
+                if lower > upper {
+                    return Err(Error::input("Lower bound must not exceed upper bound"));
+                }
+                table.filter_number(&column, typed::TypedComparison::Gte, lower, job)?;
+                table.filter_number(&column, typed::TypedComparison::Lte, upper, job)?;
+            }
             Step::Sort { column } => table.sort_by(&column, job)?,
             Step::SelectColumns { columns } => table.select_columns(&columns, job)?,
             Step::RenameColumn { column, name } => table.rename_column(&column, name)?,
+            Step::DropMissing { column } => table.drop_missing(&column, job)?,
+            Step::DropRowsAnyMissing {} => table.drop_rows_any_missing(job)?,
+            Step::HeadRows { rows } => table.head_rows(rows, job)?,
+            Step::TailRows { rows } => table.tail_rows(rows, job)?,
+            Step::ReverseRows {} => table.reverse_rows(job)?,
             _ => return Ok(None),
         }
     }
@@ -1928,6 +2000,50 @@ mod tests {
     }
 
     #[test]
+    fn typed_project_text_filter_preserves_categorical_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("text-filter.csv");
+        let project_path = dir.path().join("text-filter-project.json");
+        let output = dir.path().join("text-filter.parquet");
+        let original = "region,value\nNorth,1\nsouth,2\n,3\n";
+        std::fs::write(&input, original).unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {"overrides": {"region": "categorical"}},
+                "steps": [
+                    {"operation": "filter-contains-insensitive", "column": "region", "value": "NORTH"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let result = handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(result.written, Some(output.clone()));
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert!(matches!(
+            reader.schema().field(0).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 1);
+    }
+
+    #[test]
     fn typed_project_renames_and_inner_joins_preserving_types_nulls_and_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("left.csv");
@@ -2154,6 +2270,38 @@ mod tests {
                 .values(),
             &[2, 1]
         );
+
+        let text_filtered = dir.path().join("text-filtered.parquet");
+        run(
+            "filter-contains-insensitive",
+            r#"{"column":"label","value":"A"}"#,
+            &text_filtered,
+        );
+        let bytes = localwright_core::read_bounded(&text_filtered, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(2).data_type(), &DataType::Utf8);
+        let mut batches = reader.build().unwrap();
+        assert_eq!(batches.next().unwrap().unwrap().num_rows(), 1);
+
+        let unique = dir.path().join("unique-by-score.parquet");
+        run(
+            "drop-duplicates-by-columns",
+            r#"{"columns":["score"]}"#,
+            &unique,
+        );
+        let bytes = localwright_core::read_bounded(&unique, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(ids.value(0), 10);
+        assert_eq!(ids.value(1), 2);
+        assert!(ids.is_null(2));
 
         let sorted = dir.path().join("sorted.parquet");
         run("sort", "id", &sorted);
