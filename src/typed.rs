@@ -204,6 +204,8 @@ struct Column {
     name: String,
     kind: ColumnType,
     values: Vec<Scalar>,
+    /// Preserve whitespace-only source cells when a typed result is written as delimited text.
+    raw_missing: Vec<Option<String>>,
     categories: Vec<String>,
     metadata: ColumnMetadata,
 }
@@ -783,6 +785,9 @@ impl TypedTable {
         let mut values = (0..headers.len())
             .map(|_| Vec::with_capacity(row_count))
             .collect::<Vec<Vec<Scalar>>>();
+        let mut raw_missing = (0..headers.len())
+            .map(|_| Vec::with_capacity(row_count))
+            .collect::<Vec<Vec<Option<String>>>>();
         let mut categories = (0..headers.len())
             .map(|_| Vec::new())
             .collect::<Vec<Vec<String>>>();
@@ -799,10 +804,13 @@ impl TypedTable {
                 return Err(Error::input("Cell limit or inconsistent row width"));
             }
             for index in 0..headers.len() {
+                let cell = &record[index];
+                raw_missing[index]
+                    .push((!cell.is_empty() && is_missing(cell)).then(|| cell.to_owned()));
                 values[index].push(convert_cell(
                     &headers[index],
                     kinds[index],
-                    &record[index],
+                    cell,
                     &mut categories[index],
                     &mut category_ids[index],
                 )?);
@@ -817,6 +825,7 @@ impl TypedTable {
                 name,
                 kind: kinds[index],
                 values: std::mem::take(&mut values[index]),
+                raw_missing: std::mem::take(&mut raw_missing[index]),
                 categories: std::mem::take(&mut categories[index]),
             })
             .collect();
@@ -851,10 +860,15 @@ impl TypedTable {
                 .unwrap_or_else(|| infer_type(&cells));
             let metadata = request.metadata.get(name).cloned().unwrap_or_default();
             let (values, categories) = convert_column(name, kind, &cells, job)?;
+            let raw_missing = cells
+                .iter()
+                .map(|cell| (!cell.is_empty() && is_missing(cell)).then(|| (*cell).to_owned()))
+                .collect();
             columns.push(Column {
                 name: name.clone(),
                 kind,
                 values,
+                raw_missing,
                 categories,
                 metadata,
             });
@@ -953,6 +967,7 @@ impl TypedTable {
             name,
             kind: ColumnType::Float64,
             values,
+            raw_missing: vec![None; self.rows],
             categories: Vec::new(),
             metadata,
         });
@@ -1068,13 +1083,16 @@ impl TypedTable {
             .zip(names.iter().take(left_column_count))
         {
             let mut values = Vec::with_capacity(pairs.len());
+            let mut raw_missing = Vec::with_capacity(pairs.len());
             for (left_row, _) in &pairs {
                 job.check()?;
                 values.push(column.values[*left_row].clone());
+                raw_missing.push(column.raw_missing[*left_row].clone());
             }
             output_columns.push(Column {
                 name: name.clone(),
                 values,
+                raw_missing,
                 ..column
             });
         }
@@ -1083,13 +1101,16 @@ impl TypedTable {
             .zip(names.iter().skip(output_columns.len()))
         {
             let mut values = Vec::with_capacity(pairs.len());
+            let mut raw_missing = Vec::with_capacity(pairs.len());
             for (_, right_row) in &pairs {
                 job.check()?;
                 values.push(column.values[*right_row].clone());
+                raw_missing.push(column.raw_missing[*right_row].clone());
             }
             output_columns.push(Column {
                 name: name.clone(),
                 values,
+                raw_missing,
                 ..(*column).clone()
             });
         }
@@ -1110,6 +1131,7 @@ impl TypedTable {
     ) -> Result<()> {
         struct Accumulator {
             key: Scalar,
+            raw_missing: Option<String>,
             sum: f64,
             mean: f64,
             count: usize,
@@ -1154,6 +1176,7 @@ impl TypedTable {
                 lookup.insert(key, index);
                 groups.push(Accumulator {
                     key: key_value.clone(),
+                    raw_missing: group_column.raw_missing[row].clone(),
                     sum: 0.0,
                     mean: 0.0,
                     count: 0,
@@ -1203,6 +1226,10 @@ impl TypedTable {
 
         let mut key_output = group_column.clone();
         key_output.values = groups.iter().map(|group| group.key.clone()).collect();
+        key_output.raw_missing = groups
+            .iter()
+            .map(|group| group.raw_missing.clone())
+            .collect();
         let aggregate_values = groups
             .iter()
             .map(|group| {
@@ -1222,6 +1249,7 @@ impl TypedTable {
             name: aggregate_name,
             kind: ColumnType::Float64,
             values: aggregate_values,
+            raw_missing: vec![None; groups.len()],
             categories: Vec::new(),
             metadata,
         };
@@ -1335,20 +1363,22 @@ impl TypedTable {
             return Err(Error::input("Typed row selection has an invalid length"));
         }
         for column in &mut self.columns {
-            let mut row = 0;
-            let mut cancelled = false;
-            column.values.retain(|_| {
-                if job.check().is_err() {
-                    cancelled = true;
-                    return false;
-                }
-                let retain = keep[row];
-                row += 1;
-                retain
-            });
-            if cancelled {
+            let mut values = Vec::with_capacity(keep.iter().filter(|value| **value).count());
+            let mut raw_missing = Vec::with_capacity(values.capacity());
+            for (index, (value, raw)) in column
+                .values
+                .drain(..)
+                .zip(column.raw_missing.drain(..))
+                .enumerate()
+            {
                 job.check()?;
+                if keep[index] {
+                    values.push(value);
+                    raw_missing.push(raw);
+                }
             }
+            column.values = values;
+            column.raw_missing = raw_missing;
         }
         self.rows = keep.iter().filter(|retain| **retain).count();
         Ok(())
@@ -1361,7 +1391,10 @@ impl TypedTable {
         for column in &mut self.columns {
             let old = std::mem::take(&mut column.values);
             let mut slots = old.into_iter().map(Some).collect::<Vec<_>>();
+            let old_missing = std::mem::take(&mut column.raw_missing);
+            let mut missing_slots = old_missing.into_iter().map(Some).collect::<Vec<_>>();
             let mut reordered = Vec::with_capacity(order.len());
+            let mut reordered_missing = Vec::with_capacity(order.len());
             for index in order {
                 job.check()?;
                 reordered.push(
@@ -1369,8 +1402,14 @@ impl TypedTable {
                         Error::input("Typed row order contains a duplicate index")
                     })?,
                 );
+                reordered_missing.push(
+                    missing_slots[*index].take().ok_or_else(|| {
+                        Error::input("Typed row order contains a duplicate index")
+                    })?,
+                );
             }
             column.values = reordered;
+            column.raw_missing = reordered_missing;
         }
         self.rows = order.len();
         Ok(())
@@ -1471,8 +1510,9 @@ impl TypedTable {
         })
     }
 
-    /// Write typed processing results as delimited text. Nulls serialize as empty fields,
-    /// so this format cannot distinguish a null from an original empty string on reimport.
+    /// Write typed processing results as delimited text. True nulls serialize as empty fields;
+    /// captured whitespace-only source tokens remain intact. Empty strings and nulls still
+    /// cannot be distinguished after reimport.
     pub(crate) fn write_delimited(
         &self,
         path: &std::path::Path,
@@ -1491,7 +1531,13 @@ impl TypedTable {
                 let values = self
                     .columns
                     .iter()
-                    .map(|column| scalar_text(&column.values[row], &column.categories))
+                    .map(|column| {
+                        scalar_text(
+                            &column.values[row],
+                            &column.categories,
+                            column.raw_missing[row].as_deref(),
+                        )
+                    })
                     .collect::<Vec<_>>();
                 writer
                     .write_record(values)
@@ -1503,9 +1549,9 @@ impl TypedTable {
     }
 }
 
-fn scalar_text(value: &Scalar, categories: &[String]) -> String {
+fn scalar_text(value: &Scalar, categories: &[String], raw_missing: Option<&str>) -> String {
     match value {
-        Scalar::Null => String::new(),
+        Scalar::Null => raw_missing.unwrap_or_default().to_owned(),
         Scalar::Boolean(value) => value.to_string(),
         Scalar::Int64(value) => value.to_string(),
         Scalar::UInt64(value) => value.to_string(),
@@ -2260,13 +2306,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("source.csv");
         let output = directory.path().join("result.csv");
-        std::fs::write(&input, "value,note\n-2.5,\"=SUM(1,2)\"\n,plain\n").unwrap();
+        std::fs::write(
+            &input,
+            "value,note\n-2.5,\"=SUM(1,2)\"\n,plain\n ,space-only\n",
+        )
+        .unwrap();
         let typed =
             TypedTable::from_path(&input, None, SchemaRequest::default(), &Job::new()).unwrap();
         typed.write_delimited(&output, b',', &Job::new()).unwrap();
         let output = std::fs::read_to_string(&output).unwrap();
         assert!(output.contains("-2.5,\"'=SUM(1,2)\""));
         assert!(output.contains("\n,plain\n"));
+        assert!(output.contains("\n ,space-only\n"));
     }
 
     #[test]

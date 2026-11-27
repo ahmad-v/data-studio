@@ -1111,7 +1111,7 @@ fn try_typed_basic_operation(
     Ok(Some(Outcome {
         preview: preview.chars().take(24000).collect(),
         written,
-        warnings: vec!["Applied the operation to typed columns. CSV/TSV cells are decoded directly into typed values; blank and whitespace-only values are null. CSV/TSV output serializes nulls as empty fields, so it cannot distinguish null from an empty string when reimported; Parquet retains that distinction. Text inputs remain unchanged. Parquet input uses the supported-scalar decoder before type inference, so original dictionary and field metadata are not restored.".into()],
+        warnings: vec!["Applied the operation to typed columns. CSV/TSV cells are decoded directly into typed values; blank and whitespace-only values are null. CSV/TSV output preserves whitespace-only source tokens where rows remain, while true nulls serialize as empty fields; reimport cannot distinguish an empty string from null. Parquet retains that distinction. Source inputs remain unchanged. Parquet input uses the supported-scalar decoder before type inference, so original dictionary and field metadata are not restored.".into()],
         ..Outcome::default()
     }))
 }
