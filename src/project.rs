@@ -331,6 +331,171 @@ impl Project {
                         Step::FilterEndsWith { column, value } => {
                             table.filter_text(&column, &value, TextMatch::EndsWith, job)
                         }
+                        Step::FilterNumberGreater { column, value } => table.filter_compare(
+                            &column,
+                            TypedComparison::Gt,
+                            &value.to_string(),
+                            job,
+                        ),
+                        Step::FilterNumberGreaterEqual { column, value } => table
+                            .filter_compare(
+                                &column,
+                                TypedComparison::Gte,
+                                &value.to_string(),
+                                job,
+                            ),
+                        Step::FilterNumberLess { column, value } => table.filter_compare(
+                            &column,
+                            TypedComparison::Lt,
+                            &value.to_string(),
+                            job,
+                        ),
+                        Step::FilterNumberLessEqual { column, value } => table
+                            .filter_compare(
+                                &column,
+                                TypedComparison::Lte,
+                                &value.to_string(),
+                                job,
+                            ),
+                        Step::FilterNumberBetween {
+                            column,
+                            lower,
+                            upper,
+                        } => {
+                            if lower > upper {
+                                Err(Error::input("Numeric filter lower bound exceeds upper bound"))
+                            } else {
+                                table
+                                    .filter_compare(
+                                        &column,
+                                        TypedComparison::Gte,
+                                        &lower.to_string(),
+                                        job,
+                                    )
+                                    .and_then(|()| {
+                                        table.filter_compare(
+                                            &column,
+                                            TypedComparison::Lte,
+                                            &upper.to_string(),
+                                            job,
+                                        )
+                                    })
+                            }
+                        }
+                        Step::AddNumericColumns { left, right, name } => table
+                            .derive_numeric_column(
+                                name,
+                                &NumericExpr::Add {
+                                    left: Box::new(NumericExpr::Column { name: left }),
+                                    right: Box::new(NumericExpr::Column { name: right }),
+                                },
+                                ColumnMetadata::default(),
+                                job,
+                            ),
+                        Step::SubtractNumericColumns { left, right, name } => table
+                            .derive_numeric_column(
+                                name,
+                                &NumericExpr::Subtract {
+                                    left: Box::new(NumericExpr::Column { name: left }),
+                                    right: Box::new(NumericExpr::Column { name: right }),
+                                },
+                                ColumnMetadata::default(),
+                                job,
+                            ),
+                        Step::MultiplyNumericColumns { left, right, name } => table
+                            .derive_numeric_column(
+                                name,
+                                &NumericExpr::Multiply {
+                                    left: Box::new(NumericExpr::Column { name: left }),
+                                    right: Box::new(NumericExpr::Column { name: right }),
+                                },
+                                ColumnMetadata::default(),
+                                job,
+                            ),
+                        Step::DivideNumericColumns { left, right, name } => table
+                            .derive_numeric_column(
+                                name,
+                                &NumericExpr::Divide {
+                                    left: Box::new(NumericExpr::Column { name: left }),
+                                    right: Box::new(NumericExpr::Column { name: right }),
+                                },
+                                ColumnMetadata::default(),
+                                job,
+                            ),
+                        Step::PercentChangeColumn {
+                            current,
+                            baseline,
+                            name,
+                        } => table.derive_numeric_column(
+                            name,
+                            &NumericExpr::Multiply {
+                                left: Box::new(NumericExpr::Divide {
+                                    left: Box::new(NumericExpr::Subtract {
+                                        left: Box::new(NumericExpr::Column { name: current }),
+                                        right: Box::new(NumericExpr::Column { name: baseline.clone() }),
+                                    }),
+                                    right: Box::new(NumericExpr::Column { name: baseline }),
+                                }),
+                                right: Box::new(NumericExpr::Literal { value: 100.0 }),
+                            },
+                            ColumnMetadata::default(),
+                            job,
+                        ),
+                        Step::AbsoluteValueColumn { column, name } => table
+                            .derive_numeric_column(
+                                name,
+                                &NumericExpr::Absolute {
+                                    value: Box::new(NumericExpr::Column { name: column }),
+                                },
+                                ColumnMetadata::default(),
+                                job,
+                            ),
+                        Step::SquareRootColumn { column, name } => table
+                            .derive_numeric_column(
+                                name,
+                                &NumericExpr::SquareRoot {
+                                    value: Box::new(NumericExpr::Column { name: column }),
+                                },
+                                ColumnMetadata::default(),
+                                job,
+                            ),
+                        Step::Log10Column { column, name } => table
+                            .derive_numeric_column(
+                                name,
+                                &NumericExpr::Log10 {
+                                    value: Box::new(NumericExpr::Column { name: column }),
+                                },
+                                ColumnMetadata::default(),
+                                job,
+                            ),
+                        Step::RoundNumericColumn {
+                            column,
+                            name,
+                            decimal_places,
+                        } => table.derive_numeric_column(
+                            name,
+                            &NumericExpr::Round {
+                                value: Box::new(NumericExpr::Column { name: column }),
+                                decimal_places,
+                            },
+                            ColumnMetadata::default(),
+                            job,
+                        ),
+                        Step::ClipNumericColumn {
+                            column,
+                            name,
+                            minimum,
+                            maximum,
+                        } => table.derive_numeric_column(
+                            name,
+                            &NumericExpr::Clip {
+                                value: Box::new(NumericExpr::Column { name: column }),
+                                minimum,
+                                maximum,
+                            },
+                            ColumnMetadata::default(),
+                            job,
+                        ),
                         Step::Deduplicate {} => table.deduplicate_rows(None, job),
                         Step::DropDuplicatesByColumns { columns } => {
                             table.deduplicate_rows(Some(&columns), job)
@@ -374,7 +539,7 @@ impl Project {
                         Step::TailRows { rows } => table.tail_rows(rows, job),
                         Step::ReverseRows {} => table.reverse_rows(job),
                         _ => Err(Error::input(
-                            "This operation is not supported in a typed pipeline yet; use filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, fill-missing, fill-forward, fill-backward, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
+                            "This operation is not supported in a typed pipeline yet; see the typed project operations in the manual",
                         )),
                     };
                     result.map(|()| table)
