@@ -108,6 +108,16 @@ fn err(e: impl std::fmt::Display) -> Error {
     Error::input(e.to_string())
 }
 pub(crate) fn validate(headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<Table> {
+    validate_headers(&headers)?;
+    if rows.len().saturating_mul(headers.len()) > MAX_CELLS
+        || rows.iter().any(|r| r.len() != headers.len())
+    {
+        return Err(Error::input("Cell limit or inconsistent row width"));
+    }
+    Ok(Table { headers, rows })
+}
+
+pub(crate) fn validate_headers(headers: &[String]) -> Result<()> {
     let mut seen = std::collections::HashSet::new();
     if headers.is_empty()
         || headers.len() > MAX_COLS
@@ -119,12 +129,7 @@ pub(crate) fn validate(headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<T
             "Headers must be unique and nonempty (maximum 256)",
         ));
     }
-    if rows.len().saturating_mul(headers.len()) > MAX_CELLS
-        || rows.iter().any(|r| r.len() != headers.len())
-    {
-        return Err(Error::input("Cell limit or inconsistent row width"));
-    }
-    Ok(Table { headers, rows })
+    Ok(())
 }
 fn supported_parquet_type(data_type: &DataType) -> bool {
     match data_type {
@@ -1047,10 +1052,9 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             "Project worksheet selection requires XLSX input",
         ));
     }
-    let mut t = load(&r.input, sheet, &j)?;
     if r.operation == "inspect-schema" {
         let schema_request = typed::SchemaRequest::from_json(&r.parameter)?;
-        let typed = typed::TypedTable::infer(&t, schema_request, &j)?;
+        let typed = typed::TypedTable::from_path(&r.input, sheet, schema_request, &j)?;
         let report = serde_json::to_string_pretty(&typed.schema_report())?;
         let mut written = None;
         if !r.output.as_os_str().is_empty() {
@@ -1069,7 +1073,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         return Ok(Outcome {
             preview: report,
             written,
-            warnings: vec!["Schema inspection builds a typed columnar view; the source table remains unchanged. Whitespace-only cells are null; other text is preserved.".into()],
+            warnings: vec!["Delimited CSV/TSV inputs are parsed directly into typed columns. Other supported formats use the existing decoder before typed conversion. Whitespace-only cells are null; other text is preserved, and the source remains unchanged.".into()],
             ..Outcome::default()
         });
     }
@@ -1083,7 +1087,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             return Err(Error::input("Typed data requires a new .parquet output"));
         }
         let schema_request = typed::SchemaRequest::from_json(&r.parameter)?;
-        let table = typed::TypedTable::infer(&t, schema_request, &j)?;
+        let table = typed::TypedTable::from_path(&r.input, sheet, schema_request, &j)?;
         table.write_parquet(&r.output, &j)?;
         let report = serde_json::to_string_pretty(&table.schema_report())?;
         return Ok(Outcome {
@@ -1106,7 +1110,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                     "Typed project results require a new .parquet output",
                 ));
             }
-            let typed = typed::TypedTable::infer(&t, schema_request, &j)?;
+            let typed = typed::TypedTable::from_path(&r.input, sheet, schema_request, &j)?;
             let (typed, steps) = project
                 .expect("a typed schema is read from a project")
                 .run_typed(typed, &j)?;
@@ -1126,6 +1130,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             });
         }
     }
+    let mut t = load(&r.input, sheet, &j)?;
     let mut written = None;
     let mut warnings = vec!["Transformation operations still use text cells: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import casts supported flat uncompressed scalar columns to text and represents nulls as blanks.".into()];
     let preview = match r.operation.as_str() {

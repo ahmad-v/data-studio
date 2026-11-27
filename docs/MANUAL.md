@@ -44,7 +44,7 @@ Limitations: General-purpose operations still use the legacy in-memory string ta
 
 No output overwrite is allowed. No accounts, ads, telemetry or runtime downloads are intended. Do not use this unverified snapshot with valuable or hostile input. Citation and donations are voluntary.
 
-Parquet import supports flat, uncompressed scalar columns, including booleans, numeric primitives, dates, times, timestamps and UTF-8 dictionary values. Nulls become blank text in the legacy transformation table. Nested and binary columns, compressed Parquet pages and files beyond the declared/decoded byte limits are rejected. `export-typed-parquet` writes the validated schema as native Arrow physical types; subsequent legacy transforms still operate on text values.
+Parquet import supports flat, uncompressed scalar columns, including booleans, numeric primitives, dates, times, timestamps and UTF-8 dictionary values. Nulls become blank text in the legacy transformation table. Nested and binary columns, compressed Parquet pages and files beyond the declared/decoded byte limits are rejected. Typed CSV/TSV inspection, export and typed projects parse delimited records directly into columnar typed values in two bounded passes; they do not first construct the legacy row-oriented string table. XLSX and Parquet typed inputs still use their existing decoder before typed conversion. `export-typed-parquet` writes the validated schema as native Arrow physical types; legacy transforms still operate on text values.
 
 For tab-separated text, use the .tsv extension on input or output. Quoted fields can contain tabs. The same size, header and formula-guard rules apply as for CSV. TSV passed the Linux round-trip fixture.
 

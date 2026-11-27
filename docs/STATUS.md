@@ -10,7 +10,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | select-columns | Select and reorder table columns | Linux fixture-tested |
 | counts | Exact value counts for a column | Linux fixture-tested |
 | preview | CSV, TSV, named or first XLSX sheet, or supported flat scalar Parquet cast to text | Linux fixture-tested |
-| inspect-schema | Infer or explicitly validate a columnar schema; report types, nulls, categorical dictionary counts, labels and units without modifying input | Linux unit and route fixtures passed; five-target hosted verification pending |
+| inspect-schema | Infer or explicitly validate a columnar schema; report types, nulls, categorical dictionary counts, labels and units without modifying input; CSV/TSV parses directly to typed columns | Linux unit and route fixtures passed; five-target hosted verification pending |
 | export-typed-parquet | Write a validated or inferred typed Arrow schema, including nulls, temporal types, category dictionaries and label/unit metadata | Linux round-trip/rejection fixtures passed; hosted native matrix pending |
 | filter | Exact-match filter; CSV or string Parquet | Linux fixture-tested |
 | sort | Stable ascending text sort by one column | Linux fixture-tested |
@@ -20,7 +20,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | left-join | Left outer join with duplicate-key expansion and blank-key nonmatching | Linux fixture-tested |
 | right-join | Right outer join preserving right input order and every unmatched row | Linux fixture-tested |
 | full-join | Full outer join preserving unmatched rows from both tables | Linux fixture-tested |
-| run-project | Replay text projects unchanged; optional `typed_schema` enables typed comparisons, bounded numeric expressions, rename, type-preserving inner join, typed group sum/mean, sorting, selection and row windows while preserving Parquet schema, nulls, categories and metadata | Tests cover comparisons, expression errors, metadata, schema-preserving rename/join/aggregation, null semantics and failure isolation; hosted verification pending |
+| run-project | Replay text projects unchanged; optional `typed_schema` enables typed comparisons, bounded numeric expressions, rename, type-preserving inner join, typed group sum/mean, sorting, selection and row windows while preserving Parquet schema, nulls, categories and metadata; CSV/TSV inputs parse directly to typed columns | Tests cover comparisons, expression errors, metadata, schema-preserving rename/join/aggregation, null semantics and failure isolation; hosted verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |

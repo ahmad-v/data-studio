@@ -1,15 +1,16 @@
-use crate::{Table, MAX_CELLS, MAX_COLS};
+use crate::{validate_headers, Table, MAX_BYTES, MAX_CELLS, MAX_COLS};
 use arrow_array::{
     types::Int32Type, Array, ArrayRef, BooleanArray, Date32Array, DictionaryArray, Float64Array,
     Int32Array, Int64Array, StringArray, Time64NanosecondArray, TimestampNanosecondArray,
     UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
-use localwright_core::{write_new, Error, ErrorKind, Job, Result};
+use localwright_core::{read_bounded, write_new, Error, ErrorKind, Job, Result};
 use parquet::arrow::ArrowWriter;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
+    path::Path,
     sync::Arc,
 };
 
@@ -245,6 +246,93 @@ fn typed_join_key(column: &Column, value: &Scalar) -> Result<Option<String>> {
         Scalar::String(value) => format!("s:{}", serde_json::to_string(value)?),
     };
     Ok(Some(key))
+}
+
+fn validate_schema_request(headers: &[String], request: &SchemaRequest) -> Result<()> {
+    validate_headers(headers)?;
+    let names = headers.iter().map(String::as_str).collect::<std::collections::HashSet<_>>();
+    if request
+        .overrides
+        .keys()
+        .chain(request.metadata.keys())
+        .any(|name| !names.contains(name.as_str()))
+    {
+        return Err(Error::input("Schema options refer to an unknown column"));
+    }
+    for metadata in request.metadata.values() {
+        validate_metadata(metadata)?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct TypeInference {
+    nonmissing: bool,
+    all_boolean: bool,
+    all_i64: bool,
+    all_u64: bool,
+    any_integer: bool,
+    all_float: bool,
+    all_datetime: bool,
+    all_date: bool,
+    all_time: bool,
+}
+
+impl Default for TypeInference {
+    fn default() -> Self {
+        Self {
+            nonmissing: false,
+            all_boolean: true,
+            all_i64: true,
+            all_u64: true,
+            any_integer: false,
+            all_float: true,
+            all_datetime: true,
+            all_date: true,
+            all_time: true,
+        }
+    }
+}
+
+impl TypeInference {
+    fn observe(&mut self, value: &str) {
+        if is_missing(value) {
+            return;
+        }
+        self.nonmissing = true;
+        self.all_boolean &= is_boolean_word(value);
+        self.all_i64 &= value.parse::<i64>().is_ok();
+        self.all_u64 &= value.parse::<u64>().is_ok();
+        self.any_integer |= is_integer_token(value);
+        self.all_float &= value.parse::<f64>().is_ok_and(f64::is_finite);
+        self.all_datetime &= parse_datetime(value).is_some();
+        self.all_date &= parse_date(value).is_some();
+        self.all_time &= parse_time(value).is_some();
+    }
+
+    fn finish(self) -> ColumnType {
+        if !self.nonmissing {
+            ColumnType::Null
+        } else if self.all_boolean {
+            ColumnType::Boolean
+        } else if self.all_i64 {
+            ColumnType::Int64
+        } else if self.all_u64 {
+            ColumnType::UInt64
+        } else if self.any_integer {
+            ColumnType::String
+        } else if self.all_float {
+            ColumnType::Float64
+        } else if self.all_datetime {
+            ColumnType::DateTime
+        } else if self.all_date {
+            ColumnType::Date
+        } else if self.all_time {
+            ColumnType::Time
+        } else {
+            ColumnType::String
+        }
+    }
 }
 
 fn parse_filter_value(column: &Column, literal: &str) -> Result<Scalar> {
@@ -613,6 +701,117 @@ pub(crate) struct TypedTable {
 }
 
 impl TypedTable {
+    /// Load supported delimited inputs directly into typed columns without creating a
+    /// row-oriented text `Table`. Other existing formats use the legacy decoder first.
+    pub(crate) fn from_path(
+        path: &Path,
+        sheet: Option<&str>,
+        request: SchemaRequest,
+        job: &Job,
+    ) -> Result<Self> {
+        match path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some(kind @ ("csv" | "tsv")) => {
+                let bytes = read_bounded(path, MAX_BYTES)?;
+                job.check()?;
+                Self::from_delimited_bytes(&bytes, if kind == "tsv" { b'\t' } else { b',' }, request, job)
+            }
+            _ => {
+                let source = super::load(path, sheet, job)?;
+                Self::infer(&source, request, job)
+            }
+        }
+    }
+
+    fn from_delimited_bytes(
+        bytes: &[u8],
+        delimiter: u8,
+        request: SchemaRequest,
+        job: &Job,
+    ) -> Result<Self> {
+        let mut reader = csv::ReaderBuilder::new()
+            .delimiter(delimiter)
+            .from_reader(bytes);
+        let headers = reader
+            .headers()
+            .map_err(|error| Error::input(error.to_string()))?
+            .iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        validate_schema_request(&headers, &request)?;
+
+        let mut inference = vec![TypeInference::default(); headers.len()];
+        let mut row_count = 0usize;
+        for record in reader.records() {
+            job.check()?;
+            let record = record.map_err(|error| Error::input(error.to_string()))?;
+            if record.len() != headers.len() {
+                return Err(Error::input("Cell limit or inconsistent row width"));
+            }
+            row_count = row_count
+                .checked_add(1)
+                .filter(|rows| rows.saturating_mul(headers.len()) <= MAX_CELLS)
+                .ok_or_else(|| Error::input("Cell limit exceeded"))?;
+            for (state, value) in inference.iter_mut().zip(record.iter()) {
+                state.observe(value);
+            }
+        }
+
+        let kinds = headers
+            .iter()
+            .zip(inference)
+            .map(|(name, state)| request.overrides.get(name).copied().unwrap_or_else(|| state.finish()))
+            .collect::<Vec<_>>();
+        let mut values = (0..headers.len())
+            .map(|_| Vec::with_capacity(row_count))
+            .collect::<Vec<Vec<Scalar>>>();
+        let mut categories = (0..headers.len())
+            .map(|_| Vec::new())
+            .collect::<Vec<Vec<String>>>();
+        let mut category_ids = (0..headers.len())
+            .map(|_| HashMap::<String, u32>::new())
+            .collect::<Vec<_>>();
+        let mut reader = csv::ReaderBuilder::new()
+            .delimiter(delimiter)
+            .from_reader(bytes);
+        for record in reader.records() {
+            job.check()?;
+            let record = record.map_err(|error| Error::input(error.to_string()))?;
+            if record.len() != headers.len() {
+                return Err(Error::input("Cell limit or inconsistent row width"));
+            }
+            for index in 0..headers.len() {
+                values[index].push(convert_cell(
+                    &headers[index],
+                    kinds[index],
+                    &record[index],
+                    &mut categories[index],
+                    &mut category_ids[index],
+                )?);
+            }
+        }
+
+        let columns = headers
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| Column {
+                metadata: request.metadata.get(&name).cloned().unwrap_or_default(),
+                name,
+                kind: kinds[index],
+                values: std::mem::take(&mut values[index]),
+                categories: std::mem::take(&mut categories[index]),
+            })
+            .collect();
+        Ok(Self {
+            columns,
+            rows: row_count,
+        })
+    }
+
     pub(crate) fn infer(source: &Table, request: SchemaRequest, job: &Job) -> Result<Self> {
         if source.headers.is_empty()
             || source.headers.len() > MAX_COLS
@@ -621,31 +820,7 @@ impl TypedTable {
             return Err(Error::input("Typed table exceeds the schema limits"));
         }
 
-        let indexes = source
-            .headers
-            .iter()
-            .enumerate()
-            .map(|(index, name)| (name.as_str(), index))
-            .collect::<HashMap<_, _>>();
-        if request
-            .overrides
-            .keys()
-            .chain(request.metadata.keys())
-            .any(|name| !indexes.contains_key(name.as_str()))
-        {
-            return Err(Error::input("Schema options refer to an unknown column"));
-        }
-
-        for metadata in request.metadata.values() {
-            for value in [&metadata.label, &metadata.unit].into_iter().flatten() {
-                if value.chars().count() > MAX_METADATA_CHARS || value.chars().any(char::is_control)
-                {
-                    return Err(Error::input(
-                        "Column labels and units must be printable and at most 256 characters",
-                    ));
-                }
-            }
-        }
+        validate_schema_request(&source.headers, &request)?;
 
         let mut columns = Vec::with_capacity(source.headers.len());
         for (index, name) in source.headers.iter().enumerate() {
@@ -1465,42 +1640,11 @@ fn arrow_column(column: &Column) -> Result<(DataType, ArrayRef, HashMap<String, 
 }
 
 fn infer_type(cells: &[&str]) -> ColumnType {
-    let values = cells
-        .iter()
-        .copied()
-        .filter(|value| !is_missing(value))
-        .collect::<Vec<_>>();
-    if values.is_empty() {
-        return ColumnType::Null;
+    let mut inference = TypeInference::default();
+    for value in cells {
+        inference.observe(value);
     }
-    if values.iter().all(|value| is_boolean_word(value)) {
-        return ColumnType::Boolean;
-    }
-    if values.iter().all(|value| value.parse::<i64>().is_ok()) {
-        return ColumnType::Int64;
-    }
-    if values.iter().all(|value| value.parse::<u64>().is_ok()) {
-        return ColumnType::UInt64;
-    }
-    if values.iter().any(|value| is_integer_token(value)) {
-        return ColumnType::String;
-    }
-    if values
-        .iter()
-        .all(|value| value.parse::<f64>().is_ok_and(|number| number.is_finite()))
-    {
-        return ColumnType::Float64;
-    }
-    if values.iter().all(|value| parse_datetime(value).is_some()) {
-        return ColumnType::DateTime;
-    }
-    if values.iter().all(|value| parse_date(value).is_some()) {
-        return ColumnType::Date;
-    }
-    if values.iter().all(|value| parse_time(value).is_some()) {
-        return ColumnType::Time;
-    }
-    ColumnType::String
+    inference.finish()
 }
 
 fn is_boolean_word(value: &str) -> bool {
@@ -1710,49 +1854,63 @@ fn convert_column(
     let mut category_ids = HashMap::new();
     for cell in cells {
         job.check()?;
-        if is_missing(cell) {
-            values.push(Scalar::Null);
-            continue;
-        }
-        let invalid = || {
-            Error::input(format!(
-                "Column {name:?} contains a value incompatible with {kind:?}"
-            ))
-        };
-        let value = match kind {
-            ColumnType::Null => return Err(invalid()),
-            ColumnType::Boolean => Scalar::Boolean(parse_boolean(cell).ok_or_else(invalid)?),
-            ColumnType::Int64 => Scalar::Int64(cell.trim().parse().map_err(|_| invalid())?),
-            ColumnType::UInt64 => Scalar::UInt64(cell.trim().parse().map_err(|_| invalid())?),
-            ColumnType::Float64 => {
-                let number = cell.trim().parse::<f64>().map_err(|_| invalid())?;
-                if !number.is_finite() {
-                    return Err(invalid());
-                }
-                Scalar::Float64(number)
-            }
-            ColumnType::Date => Scalar::Date(parse_date(cell.trim()).ok_or_else(invalid)?),
-            ColumnType::Time => Scalar::Time(parse_time(cell.trim()).ok_or_else(invalid)?),
-            ColumnType::DateTime => {
-                Scalar::DateTime(parse_datetime(cell.trim()).ok_or_else(invalid)?)
-            }
-            ColumnType::Categorical => {
-                let id = if let Some(id) = category_ids.get(*cell) {
-                    *id
-                } else {
-                    let id = u32::try_from(categories.len())
-                        .map_err(|_| Error::new(ErrorKind::Limit, "Too many categories"))?;
-                    categories.push((*cell).to_owned());
-                    category_ids.insert(*cell, id);
-                    id
-                };
-                Scalar::Categorical(id)
-            }
-            ColumnType::String => Scalar::String((*cell).to_owned()),
-        };
-        values.push(value);
+        values.push(convert_cell(
+            name,
+            kind,
+            cell,
+            &mut categories,
+            &mut category_ids,
+        )?);
     }
     Ok((values, categories))
+}
+
+fn convert_cell(
+    name: &str,
+    kind: ColumnType,
+    cell: &str,
+    categories: &mut Vec<String>,
+    category_ids: &mut HashMap<String, u32>,
+) -> Result<Scalar> {
+    if is_missing(cell) {
+        return Ok(Scalar::Null);
+    }
+    let invalid = || {
+        Error::input(format!(
+            "Column {name:?} contains a value incompatible with {kind:?}"
+        ))
+    };
+    Ok(match kind {
+        ColumnType::Null => return Err(invalid()),
+        ColumnType::Boolean => Scalar::Boolean(parse_boolean(cell).ok_or_else(invalid)?),
+        ColumnType::Int64 => Scalar::Int64(cell.trim().parse().map_err(|_| invalid())?),
+        ColumnType::UInt64 => Scalar::UInt64(cell.trim().parse().map_err(|_| invalid())?),
+        ColumnType::Float64 => {
+            let number = cell.trim().parse::<f64>().map_err(|_| invalid())?;
+            if !number.is_finite() {
+                return Err(invalid());
+            }
+            Scalar::Float64(number)
+        }
+        ColumnType::Date => Scalar::Date(parse_date(cell.trim()).ok_or_else(invalid)?),
+        ColumnType::Time => Scalar::Time(parse_time(cell.trim()).ok_or_else(invalid)?),
+        ColumnType::DateTime => {
+            Scalar::DateTime(parse_datetime(cell.trim()).ok_or_else(invalid)?)
+        }
+        ColumnType::Categorical => {
+            let id = if let Some(id) = category_ids.get(cell) {
+                *id
+            } else {
+                let id = u32::try_from(categories.len())
+                    .map_err(|_| Error::new(ErrorKind::Limit, "Too many categories"))?;
+                categories.push(cell.to_owned());
+                category_ids.insert(cell.to_owned(), id);
+                id
+            };
+            Scalar::Categorical(id)
+        }
+        ColumnType::String => Scalar::String(cell.to_owned()),
+    })
 }
 
 #[cfg(test)]
@@ -1839,6 +1997,27 @@ mod tests {
             overflow_schema.schema_report()["columns"][0]["type"],
             "string"
         );
+    }
+
+    #[test]
+    fn direct_delimited_loader_matches_legacy_typed_inference() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("typed.tsv");
+        std::fs::write(
+            &input,
+            "id\twhen\tgroup\tnote\n2\t2024-02-29T12:30:00Z\ta\t\"quoted\ttext\"\n1\t\tb\t \n\t2024-03-01T00:00:00Z\ta\tlast\n",
+        )
+        .unwrap();
+        let request = SchemaRequest::from_json(
+            r#"{"overrides":{"group":"categorical"},"metadata":{"group":{"label":"Study group","unit":null}}}"#,
+        )
+        .unwrap();
+        let job = Job::new();
+        let legacy = crate::load(&input, None, &job).unwrap();
+        let inferred = TypedTable::infer(&legacy, request.clone(), &job).unwrap();
+        let direct = TypedTable::from_path(&input, None, request, &job).unwrap();
+        assert_eq!(direct.schema_report(), inferred.schema_report());
+        assert_eq!(direct.preview_report(), inferred.preview_report());
     }
 
     #[test]

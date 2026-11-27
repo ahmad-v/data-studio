@@ -65,7 +65,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Typed inference and user-route fixtures passed in the Linux test suite; hosted native matrix pending"
+      "fixture_status": "Typed inference and user-route fixtures passed in the Linux test suite; CSV/TSV typed routes decode directly into columnar values without the legacy row-string table; hosted native matrix pending"
     },
     {
       "operation": "export-typed-parquet",
@@ -74,7 +74,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux round-trip and rejection fixtures passed for scalar types, nulls, categorical dictionary, UTC timestamp normalization, metadata, and no-overwrite; hosted verification pending"
+      "fixture_status": "Linux round-trip and rejection fixtures passed for scalar types, nulls, categorical dictionary, UTC timestamp normalization, metadata, and no-overwrite; CSV/TSV inputs decode directly into typed columns; hosted verification pending"
     },
     {
       "operation": "filter",
@@ -153,7 +153,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; typed numeric expressions, comparisons, null propagation, metadata round-trip, stable sorting, type-preserving rename/join, grouped sum/mean and aggregation overflow fixtures are implemented; hosted verification pending"
+      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; CSV/TSV typed project imports decode directly to typed columns; typed numeric expressions, comparisons, null propagation, metadata round-trip, stable sorting, type-preserving rename/join, grouped sum/mean and aggregation overflow fixtures are implemented; hosted verification pending"
     },
     {
       "operation": "select-sql",

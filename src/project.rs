@@ -1,5 +1,5 @@
 use super::{
-    apply_step, load,
+    apply_step,
     typed::{ColumnMetadata, NumericExpr, SchemaRequest, TypedComparison, TypedTable},
     Table,
 };
@@ -297,13 +297,9 @@ impl Project {
                     } else {
                         self.project_directory.join(right_path)
                     };
-                    match load(&path, None, job) {
-                        Ok(source) => match TypedTable::infer(&source, right_schema, job) {
-                            Ok(right) => table.inner_join(right, &left_key, &right_key, job),
-                            Err(error) => Err(error),
-                        },
-                        Err(error) => Err(error),
-                    }
+                    TypedTable::from_path(&path, None, right_schema, job).and_then(|right| {
+                        table.inner_join(right, &left_key, &right_key, job)
+                    })
                 }
                 step => {
                     let result = match step {
