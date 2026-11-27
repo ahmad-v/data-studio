@@ -1482,7 +1482,7 @@ impl TypedTable {
     /// deduplication; categorical values compare by label, not dictionary id.
     pub(crate) fn deduplicate_rows(&mut self, names: Option<&[String]>, job: &Job) -> Result<()> {
         let selected = match names {
-            Some(names) if names.is_empty() => {
+            Some([]) => {
                 return Err(Error::input("Select at least one duplicate key column"));
             }
             Some(names) => {
@@ -1501,7 +1501,7 @@ impl TypedTable {
         let mut buckets = HashMap::<u64, Vec<usize>>::new();
         let hash_builder = std::collections::hash_map::RandomState::new();
         let mut keep = vec![false; self.rows];
-        for row in 0..self.rows {
+        for (row, keep_row) in keep.iter_mut().enumerate() {
             job.check()?;
             let mut hasher = hash_builder.build_hasher();
             for &column_index in &selected {
@@ -1517,7 +1517,7 @@ impl TypedTable {
                 })
             });
             if !duplicate {
-                keep[row] = true;
+                *keep_row = true;
                 candidates.push(row);
             }
         }
