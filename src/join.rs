@@ -48,11 +48,21 @@ pub fn run(left: Table, parameter: &str, kind: Kind, job: &Job) -> Result<Table>
     let mut output = validate(headers, Vec::new())?;
     let maximum_rows = MAX_CELLS / output.headers.len();
     let mut indexed = HashMap::<&str, Vec<usize>>::new();
-    for (index, row) in right.rows.iter().enumerate() {
-        job.check()?;
-        let key = row[right_key].as_str();
-        if !key.is_empty() {
-            indexed.entry(key).or_default().push(index);
+    if matches!(kind, Kind::Right) {
+        for (index, row) in left.rows.iter().enumerate() {
+            job.check()?;
+            let key = row[left_key].as_str();
+            if !key.is_empty() {
+                indexed.entry(key).or_default().push(index);
+            }
+        }
+    } else {
+        for (index, row) in right.rows.iter().enumerate() {
+            job.check()?;
+            let key = row[right_key].as_str();
+            if !key.is_empty() {
+                indexed.entry(key).or_default().push(index);
+            }
         }
     }
 
@@ -84,24 +94,43 @@ pub fn run(left: Table, parameter: &str, kind: Kind, job: &Job) -> Result<Table>
             output.rows.push(row);
             Ok(())
         };
-    for left_row in &left.rows {
-        job.check()?;
-        let matches = if left_row[left_key].is_empty() {
-            None
-        } else {
-            indexed.get(left_row[left_key].as_str())
-        };
-        if let Some(matches) = matches {
-            for &right_index in matches {
-                job.check()?;
-                matched_right[right_index] = true;
-                append(Some(left_row), Some(&right.rows[right_index]))?;
+    if matches!(kind, Kind::Right) {
+        for right_row in &right.rows {
+            job.check()?;
+            let matches = if right_row[right_key].is_empty() {
+                None
+            } else {
+                indexed.get(right_row[right_key].as_str())
+            };
+            if let Some(matches) = matches {
+                for &left_index in matches {
+                    job.check()?;
+                    append(Some(&left.rows[left_index]), Some(right_row))?;
+                }
+            } else {
+                append(None, Some(right_row))?;
             }
-        } else if matches!(kind, Kind::Left | Kind::Full) {
-            append(Some(left_row), None)?;
+        }
+    } else {
+        for left_row in &left.rows {
+            job.check()?;
+            let matches = if left_row[left_key].is_empty() {
+                None
+            } else {
+                indexed.get(left_row[left_key].as_str())
+            };
+            if let Some(matches) = matches {
+                for &right_index in matches {
+                    job.check()?;
+                    matched_right[right_index] = true;
+                    append(Some(left_row), Some(&right.rows[right_index]))?;
+                }
+            } else if matches!(kind, Kind::Left | Kind::Full) {
+                append(Some(left_row), None)?;
+            }
         }
     }
-    if matches!(kind, Kind::Right | Kind::Full) {
+    if matches!(kind, Kind::Full) {
         for (index, right_row) in right.rows.iter().enumerate() {
             job.check()?;
             if !matched_right[index] {

@@ -44,18 +44,24 @@ fn left_join_preserves_unmatched_left_and_expands_duplicate_matches() {
 
 #[test]
 fn right_and_full_join_preserve_unmatched_rows_including_blank_keys() {
-    let left = "id,name\n1,A\n,blank-left\n";
-    let right = "id,score\n1,ok\n2,extra\n,blank-right\n";
+    let left = "id,name\n1,A\n1,A2\n,blank-left\n";
+    let right = "id,score\n2,extra\n1,ok\n,blank-right\n";
     let right_result = join("right-join", left, right);
     assert_eq!(
         right_result["preview"],
-        json!([["1", "A", "ok"], ["", "", "extra"], ["", "", "blank-right"]])
+        json!([
+            ["", "", "extra"],
+            ["1", "A", "ok"],
+            ["1", "A2", "ok"],
+            ["", "", "blank-right"]
+        ])
     );
     let full_result = join("full-join", left, right);
     assert_eq!(
         full_result["preview"],
         json!([
             ["1", "A", "ok"],
+            ["1", "A2", "ok"],
             ["", "blank-left", ""],
             ["", "", "extra"],
             ["", "", "blank-right"]

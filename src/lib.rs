@@ -796,7 +796,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             ) {
                 let (kind, warning) = match r.operation.as_str() {
                     "left-join" => (join::Kind::Left, "Left join uses exact text keys. Blank keys do not match; unmatched left rows are preserved with blank right columns. Duplicate matches produce every matching pair."),
-                    "right-join" => (join::Kind::Right, "Right join uses exact text keys. Blank keys do not match; unmatched right rows are preserved with blank left columns. Duplicate matches produce every matching pair."),
+                    "right-join" => (join::Kind::Right, "Right join uses exact text keys. Blank keys do not match; unmatched right rows are preserved with blank left columns. Results follow right input order, with duplicate left matches in left input order."),
                     "full-join" => (join::Kind::Full, "Full outer join uses exact text keys. Blank keys do not match; unmatched rows from both tables are preserved with blank columns on the missing side."),
                     _ => (join::Kind::Inner, "Inner join uses exact text keys. Blank and unmatched keys are excluded. Matching duplicate keys produce every matching pair."),
                 };
