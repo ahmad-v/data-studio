@@ -1470,6 +1470,64 @@ impl TypedTable {
             Ok(())
         })
     }
+
+    /// Write typed processing results as delimited text. Nulls serialize as empty fields,
+    /// so this format cannot distinguish a null from an original empty string on reimport.
+    pub(crate) fn write_delimited(
+        &self,
+        path: &std::path::Path,
+        delimiter: u8,
+        job: &Job,
+    ) -> Result<()> {
+        write_new(path, |file| {
+            let mut writer = csv::WriterBuilder::new()
+                .delimiter(delimiter)
+                .from_writer(file);
+            writer
+                .write_record(self.columns.iter().map(|column| safe_text(&column.name)))
+                .map_err(|error| Error::input(error.to_string()))?;
+            for row in 0..self.rows {
+                job.check()?;
+                let values = self
+                    .columns
+                    .iter()
+                    .map(|column| scalar_text(&column.values[row], &column.categories))
+                    .collect::<Vec<_>>();
+                writer
+                    .write_record(values)
+                    .map_err(|error| Error::input(error.to_string()))?;
+            }
+            writer.flush()?;
+            Ok(())
+        })
+    }
+}
+
+fn scalar_text(value: &Scalar, categories: &[String]) -> String {
+    match value {
+        Scalar::Null => String::new(),
+        Scalar::Boolean(value) => value.to_string(),
+        Scalar::Int64(value) => value.to_string(),
+        Scalar::UInt64(value) => value.to_string(),
+        Scalar::Float64(value) => value.to_string(),
+        Scalar::Date(date) => format!("{:04}-{:02}-{:02}", date.year, date.month, date.day),
+        Scalar::Time(time) => format_time(*time),
+        Scalar::DateTime(datetime) => format_datetime(*datetime),
+        Scalar::Categorical(index) => categories
+            .get(*index as usize)
+            .map(|value| safe_text(value))
+            .unwrap_or_default(),
+        Scalar::String(value) => safe_text(value),
+    }
+}
+
+fn safe_text(value: &str) -> String {
+    if value.trim_start().starts_with(['=', '+', '-', '@']) || value.starts_with(['\t', '\r', '\n'])
+    {
+        format!("'{value}")
+    } else {
+        value.to_owned()
+    }
 }
 
 fn arrow_column(column: &Column) -> Result<(DataType, ArrayRef, HashMap<String, String>)> {
@@ -2195,6 +2253,20 @@ mod tests {
             .unwrap();
         assert_eq!(typed.rows, 1);
         assert_eq!(typed.columns[2].values, vec![Scalar::Float64(12.0)]);
+    }
+
+    #[test]
+    fn typed_delimited_export_keeps_numeric_values_and_safes_text_cells() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("source.csv");
+        let output = directory.path().join("result.csv");
+        std::fs::write(&input, "value,note\n-2.5,=SUM(1%2C2)\n,plain\n").unwrap();
+        let typed =
+            TypedTable::from_path(&input, None, SchemaRequest::default(), &Job::new()).unwrap();
+        typed.write_delimited(&output, b',', &Job::new()).unwrap();
+        let output = std::fs::read_to_string(&output).unwrap();
+        assert!(output.contains("-2.5,'=SUM(1%2C2)"));
+        assert!(output.contains("\n,plain\n"));
     }
 
     #[test]

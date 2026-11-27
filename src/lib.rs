@@ -1050,11 +1050,13 @@ fn try_typed_basic_operation(
     if !matches!(input_kind.as_deref(), Some("csv" | "tsv" | "parquet")) {
         return Ok(None);
     }
-    let writes_parquet = output
+    let output_kind = output
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("parquet"));
-    if !output.as_os_str().is_empty() && !writes_parquet {
+        .map(str::to_ascii_lowercase);
+    if !output.as_os_str().is_empty()
+        && !matches!(output_kind.as_deref(), Some("csv" | "tsv" | "parquet"))
+    {
         return Ok(None);
     }
     let Some(step) = request_step(operation, parameter)? else {
@@ -1070,15 +1072,20 @@ fn try_typed_basic_operation(
         _ => return Ok(None),
     }
     let mut written = None;
-    if writes_parquet {
-        table.write_parquet(output, job)?;
+    if let Some(kind) = output_kind.as_deref() {
+        match kind {
+            "parquet" => table.write_parquet(output, job)?,
+            "csv" => table.write_delimited(output, b',', job)?,
+            "tsv" => table.write_delimited(output, b'\t', job)?,
+            _ => unreachable!("output extension was validated"),
+        }
         written = Some(output.to_path_buf());
     }
     let preview = serde_json::to_string_pretty(&table.preview_report())?;
     Ok(Some(Outcome {
         preview: preview.chars().take(24000).collect(),
         written,
-        warnings: vec!["Applied the operation to typed columns. CSV/TSV cells are decoded directly into typed values; blank and whitespace-only values are null. Parquet input uses the existing supported-scalar decoder before type inference, so original dictionary and field metadata are not restored.".into()],
+        warnings: vec!["Applied the operation to typed columns. CSV/TSV cells are decoded directly into typed values; blank and whitespace-only values are null. CSV/TSV output serializes nulls as empty fields, so it cannot distinguish null from an empty string when reimported; Parquet retains that distinction. Text inputs remain unchanged. Parquet input uses the supported-scalar decoder before type inference, so original dictionary and field metadata are not restored.".into()],
         ..Outcome::default()
     }))
 }
