@@ -89,6 +89,68 @@ fn version_two_projects_use_typed_numeric_filters_and_shared_expressions() {
 }
 
 #[test]
+fn version_two_projects_add_rename_and_drop_columns_without_erasing_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input.csv");
+    let project = dir.path().join("project.json");
+    let output = dir.path().join("result.parquet");
+    let original = "id,value\n001,10\n002,20\n";
+    fs::write(&input, original).unwrap();
+    fs::write(
+        &project,
+        r#"{
+            "schema_version": 2,
+            "steps": [
+                {"operation":"add-index-column","name":"row_num","start":5},
+                {"operation":"add-constant-column","name":"cohort","value":"007","value_type":"int64"},
+                {"operation":"rename-columns","mapping":{"id":"sample_id","value":"measure"}},
+                {"operation":"drop-columns","columns":["row_num"]}
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    data_studio::handle(
+        Request {
+            operation: "run-project".into(),
+            input: input.clone(),
+            output: output.clone(),
+            parameter: project.to_string_lossy().into_owned(),
+            ..Request::default()
+        },
+        Job::new(),
+    )
+    .unwrap();
+
+    let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+    let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+        bytes::Bytes::from(bytes),
+    )
+    .unwrap();
+    let schema = reader.schema();
+    assert_eq!(
+        schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>(),
+        ["sample_id", "measure", "cohort"]
+    );
+    assert!(schema
+        .fields()
+        .iter()
+        .all(|field| field.data_type() == &arrow_schema::DataType::Int64));
+    let batch = reader.build().unwrap().next().unwrap().unwrap();
+    let cohort = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .unwrap();
+    assert_eq!(cohort.values(), &[7, 7]);
+    assert_eq!(fs::read_to_string(input).unwrap(), original);
+}
+
+#[test]
 fn ordinary_csv_numeric_filters_use_typed_values_and_keep_source() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("input.csv");

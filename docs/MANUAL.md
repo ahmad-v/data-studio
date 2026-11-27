@@ -14,10 +14,10 @@ Choose `Inspect typed table` to open the native Data table tab for CSV, TSV, XLS
 - `head-rows` and `tail-rows`: JSON parameter `{"rows":N}` keeps the first or last N rows, preserving source order. N is limited to 500,000.
 - `drop-duplicates-by-columns`: JSON parameter `{"columns":["email"]}` keeps the first occurrence. CSV, TSV and supported scalar Parquet inputs compare typed values, treating null keys as equal while preserving the original values and schema.
 - `add-index-column`: JSON parameter `{"name":"row_number","start":1}` adds sequential signed 64-bit values in current row order and rejects overflow.
-- `add-constant-column`: JSON parameter `{"name":"cohort","value":"pilot"}` copies the literal value into a new column.
+- `add-constant-column`: JSON parameter `{"name":"cohort","value":"pilot"}` copies a literal into a new column. In version 2 typed projects, optional `value_type` can explicitly select `boolean`, `int64`, `uint64`, `float64`, `date`, `time`, `datetime`, `categorical`, `string`, or `null`; without it the value is inferred. Invalid values and overflow fail before output is written.
 - `normalize-text`: JSON parameter `{"column":"name","mode":"trim"}` supports `trim`, Unicode lowercase, Unicode uppercase, and `collapse-whitespace` (Unicode whitespace collapsed to one ASCII space).
-- `rename-columns`: JSON parameter `{"mapping":{"old_a":"new_a","old_b":"new_b"}}` applies all changes atomically; final names must be unique.
-- `drop-columns`: JSON parameter `{"columns":["temporary"]}` removes selected columns, retains input order for the rest, and requires at least one remaining column.
+- `rename-columns`: JSON parameter `{"mapping":{"old_a":"new_a","old_b":"new_b"}}` applies all changes atomically; final names must be unique. Version 2 typed projects preserve each column's values, type, categories and metadata.
+- `drop-columns`: JSON parameter `{"columns":["temporary"]}` removes selected columns, retains input order for the rest, and requires at least one remaining column. Version 2 typed projects preserve remaining values and schema.
 - `filter-not-equal`: JSON parameter `{"column":"status","value":"closed"}` retains rows that differ. Ordinary CSV/TSV and supported scalar Parquet routes compare using inferred types; legacy projects keep their existing text semantics.
 - `filter-contains-insensitive`: JSON parameter `{"column":"name","value":"ada"}` compares Unicode lowercase text; it is not locale-specific collation or full linguistic case-folding. CSV, TSV and supported scalar Parquet inputs use the typed route, preserving types and null semantics.
 - `filter-starts-with` and `filter-ends-with`: JSON parameters name a column and a nonempty literal prefix or suffix. Matching is case-sensitive.

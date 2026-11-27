@@ -148,12 +148,12 @@
     },
     {
       "operation": "run-project",
-      "description": "Replay version 1 text projects or typed pipelines with comparisons, text predicates, type-aware deduplication, bounded numeric expressions, schema-preserving rename, type-checked inner joins, typed grouped sum/mean, type-checked missing-value fills and Arrow-preserving Parquet output",
+      "description": "Replay version 1 text projects or version 2 typed pipelines with comparisons, text predicates, type-aware deduplication, bounded numeric expressions, typed constant and index columns, atomic multi-column rename/drop, schema-preserving joins, typed grouped sum/mean, type-checked missing-value fills and Arrow-preserving Parquet output",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; typed project fixtures cover delimited columnar import, numeric expressions, text predicates, comparisons, type-aware duplicate removal, null propagation, metadata round-trip, stable sorting, type-preserving rename/join, grouped sum/mean and aggregation overflow; new type-preserving missing-value fill tests are pending hosted verification"
+      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; typed project fixtures cover delimited columnar import, numeric expressions, text predicates, comparisons, type-aware duplicate removal, null propagation, metadata round-trip, stable sorting, type-preserving rename/join/column additions and removal, grouped sum/mean and aggregation overflow; hosted verification for the newest column-operation increment is pending"
     },
     {
       "operation": "select-sql",
@@ -457,7 +457,7 @@
     },
     {
       "operation": "add-constant-column",
-      "description": "Add a literal constant text column",
+      "description": "Add a literal constant column; version 2 typed projects support explicit scalar type override",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
@@ -475,7 +475,7 @@
     },
     {
       "operation": "rename-columns",
-      "description": "Atomically rename multiple table columns",
+      "description": "Atomically rename multiple table columns while preserving typed schema in version 2 projects",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
@@ -484,7 +484,7 @@
     },
     {
       "operation": "drop-columns",
-      "description": "Remove selected columns while retaining at least one column",
+      "description": "Remove selected columns while retaining at least one column and preserving typed schema in version 2 projects",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"

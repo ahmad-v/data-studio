@@ -572,7 +572,7 @@ pub(crate) fn apply(mut table: Table, step: Step, job: &Job) -> Result<Table> {
                 row.push(index);
             }
         }
-        Step::AddConstantColumn { name, value } => {
+        Step::AddConstantColumn { name, value, .. } => {
             unique_name(&table, &name, &HashSet::new())?;
             if table.headers.len() >= MAX_COLS
                 || table.rows.len().saturating_mul(table.headers.len() + 1) > MAX_CELLS

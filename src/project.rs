@@ -1,6 +1,9 @@
 use super::{
     apply_step,
-    typed::{ColumnMetadata, NumericExpr, SchemaRequest, TextMatch, TypedComparison, TypedTable},
+    typed::{
+        ColumnMetadata, ColumnType, NumericExpr, SchemaRequest, TextMatch, TypedComparison,
+        TypedTable,
+    },
     Table,
 };
 use localwright_core::{read_bounded, Error, Job, Result};
@@ -132,6 +135,8 @@ pub enum Step {
     AddConstantColumn {
         name: String,
         value: String,
+        #[serde(default)]
+        value_type: Option<ColumnType>,
     },
     NormalizeText {
         column: String,
@@ -514,6 +519,16 @@ impl Project {
                         Step::RenameColumn { column, name } => {
                             table.rename_column(&column, name)
                         }
+                        Step::RenameColumns { mapping } => table.rename_columns(&mapping),
+                        Step::DropColumns { columns } => table.drop_columns(&columns, job),
+                        Step::AddIndexColumn { name, start } => {
+                            table.add_index_column(name, start, job)
+                        }
+                        Step::AddConstantColumn {
+                            name,
+                            value,
+                            value_type,
+                        } => table.add_constant_column(name, &value, value_type, job),
                         Step::GroupSum {
                             group_column,
                             value_column,
