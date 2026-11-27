@@ -55,7 +55,14 @@ jobs:
       - name: Install Linux GUI build prerequisites
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
+          # Query only Ubuntu's official package indexes. Hosted runners may
+          # include third-party sources (for example packages.microsoft.com)
+          # whose availability is unrelated to these build prerequisites.
+          sudo apt-get \
+            -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" \
+            -o Dir::Etc::sourceparts="-" \
+            -o APT::Get::List-Cleanup="0" \
+            update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev
       - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
