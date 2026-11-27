@@ -64,7 +64,27 @@ Create a UTF-8 JSON file with schema version 1 and up to 32 ordered steps. The e
 }
 ```
 
-Use `mask-column` with a `column` field to include a fixed mask step. The optional top-level `worksheet` selects an exact XLSX sheet name. Set the table as Input and the project path as Parameter, or use `--cli run-project input.csv result.tsv project.json`. An empty output path previews the result. An invalid step reports its number and leaves the output absent. Keep project files local if filter values contain sensitive information. The project engine interprets only these operations and uses the same bounded text-table loader as individual routes.
+Use `mask-column` with a `column` field to include a fixed mask step. The optional top-level `worksheet` selects an exact XLSX sheet name. Set the table as Input and the project path as Parameter, or use `--cli run-project input.csv result.tsv project.json`. An empty output path previews the result. An invalid step reports its number and leaves the output absent. Keep project files local if filter values contain sensitive information. Projects without `typed_schema` use the existing text-table pipeline.
+
+To keep schema and nulls through a supported transformation subset, add `typed_schema` to a version 1 project and save results as Parquet:
+
+```json
+{
+  "schema_version": 1,
+  "typed_schema": {
+    "overrides": {"id": "int64", "group": "categorical"},
+    "metadata": {"score": {"label": "Response", "unit": "points"}}
+  },
+  "steps": [
+    {"operation": "filter", "column": "score", "value": "10"},
+    {"operation": "sort", "column": "id"},
+    {"operation": "select-columns", "columns": ["id", "group", "score"]},
+    {"operation": "drop-rows-any-missing"}
+  ]
+}
+```
+
+The typed subset supports `filter`, `sort`, `select-columns`, `drop-missing`, `drop-rows-any-missing`, `head-rows`, `tail-rows` and `reverse-rows`. Filter literals are parsed using the selected column type. Sorts use typed ordering with nulls last and preserve input order for ties. Categorical values sort by their text labels. An incompatible filter or mixed timezone-aware and naive datetime sort fails the project without writing a partial output. Other operations currently return a step-specific unsupported-operation error in typed mode. The typed Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units; the source remains untouched.
 
 ## Join two tables
 

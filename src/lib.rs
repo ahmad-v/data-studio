@@ -31,7 +31,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank."},
- Operation{id:"run-project",label:"Run data project",hint:"Enter the project JSON path. Preview a local table or write it to a new CSV, TSV or Parquet file."},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed pipelines preserve nulls and schema through filter, sort, select-columns, missing-row removal, head, tail and reverse steps; save typed output to a new .parquet file. Projects without typed_schema keep their existing text behavior."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
@@ -1086,6 +1086,43 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             ..Outcome::default()
         });
     }
+    if r.operation == "run-project" {
+        if let Some(schema_request) = project
+            .as_ref()
+            .and_then(Project::typed_schema)
+            .cloned()
+        {
+            if !r.output.as_os_str().is_empty()
+                && !r
+                    .output
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("parquet"))
+            {
+                return Err(Error::input(
+                    "Typed project results require a new .parquet output",
+                ));
+            }
+            let typed = typed::TypedTable::infer(&t, schema_request, &j)?;
+            let (typed, steps) = project
+                .expect("a typed schema is read from a project")
+                .run_typed(typed, &j)?;
+            let mut written = None;
+            if !r.output.as_os_str().is_empty() {
+                typed.write_parquet(&r.output, &j)?;
+                written = Some(r.output);
+            }
+            let preview = serde_json::to_string_pretty(&typed.preview_report())?;
+            return Ok(Outcome {
+                preview: preview.chars().take(24000).collect(),
+                written,
+                warnings: vec![format!(
+                    "Applied {steps} typed project steps. Filters and sorts use the declared or inferred column types; nulls sort last. Values, categorical dictionaries, nulls, labels and units remain typed in Parquet output. Whitespace-only source cells are null. Typed pipelines currently support filter, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows and reverse-rows; the original source is unchanged."
+                )],
+                ..Outcome::default()
+            });
+        }
+    }
     let mut written = None;
     let mut warnings = vec!["Transformation operations still use text cells: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import casts supported flat uncompressed scalar columns to text and represents nulls as blanks.".into()];
     let preview = match r.operation.as_str() {
@@ -1540,6 +1577,115 @@ mod tests {
             std::fs::read_to_string(output).unwrap(),
             "id\tname\n1\t[MASKED]\n2\t[MASKED]\n"
         );
+    }
+
+    #[test]
+    fn typed_project_filters_and_sorts_by_schema_and_writes_typed_parquet() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("typed-input.csv");
+        let project_path = dir.path().join("typed-project.json");
+        let output = dir.path().join("typed-result.parquet");
+        let original = concat!(
+            "id,score,group\n",
+            "10,2,first\n",
+            "2,10,second\n",
+            "1,10,first\n",
+            "3,,missing\n",
+        );
+        std::fs::write(&input, original).unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {
+                    "overrides": {"group": "categorical"},
+                    "metadata": {"score": {"label": "Response", "unit": "points"}}
+                },
+                "steps": [
+                    {"operation": "filter", "column": "score", "value": "010"},
+                    {"operation": "sort", "column": "id"},
+                    {"operation": "select-columns", "columns": ["id", "score", "group"]}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let result = handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(result.written, Some(output.clone()));
+        assert!(result.preview.contains("\"rows\": 2"));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("typed project steps")));
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let schema = reader.schema();
+        assert_eq!(schema.field(0).name(), "id");
+        assert_eq!(schema.field(0).data_type(), &DataType::Int64);
+        assert_eq!(schema.field(1).data_type(), &DataType::Int64);
+        assert_eq!(schema.field(2).data_type(), &DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Utf8)
+        ));
+        assert_eq!(schema.field(1).metadata()["localwright.label"], "Response");
+        assert_eq!(schema.field(1).metadata()["localwright.unit"], "points");
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[1, 2]);
+        let scores = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(scores.values(), &[10, 10]);
+    }
+
+    #[test]
+    fn typed_project_rejects_incompatible_filter_without_creating_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("typed-input.csv");
+        let project_path = dir.path().join("typed-project.json");
+        let output = dir.path().join("typed-result.parquet");
+        std::fs::write(&input, "score\n10\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {"overrides": {"score": "int64"}},
+                "steps": [{"operation": "filter", "column": "score", "value": "ten"}]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("incompatible with column"));
+        assert!(!output.exists());
     }
 
     #[test]

@@ -20,7 +20,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | left-join | Left outer join with duplicate-key expansion and blank-key nonmatching | Linux fixture-tested |
 | right-join | Right outer join preserving right input order and every unmatched row | Linux fixture-tested |
 | full-join | Full outer join preserving unmatched rows from both tables | Linux fixture-tested |
-| run-project | Replay declared table transformations from a versioned project | Linux fixture and CLI-tested |
+| run-project | Replay text projects unchanged; optional `typed_schema` keeps declared/inferred scalar, categorical and null types through filter, typed sort, selection, missing-row removal, head, tail and reverse steps, with Parquet output | Linux typed Parquet project integration fixture added; CI verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
@@ -87,6 +87,6 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 
 ## Known gaps
 
-Existing transformations still run on the legacy in-memory string table. Typed schema inspection now connects to typed Parquet import/export for scalar values, nulls, categories and Arrow field labels/units, but typed values are not yet retained through project pipelines or transformations. Large-data virtualization, typed editing, general formulas, regex transforms, multi-key/duplicate-aggregating pivots, project editor, undo, batch runs, other formats, authoritative palettes and full scientific export remain open. XLSX ZIP expansion and range allocation occur in the dependency before cell limit; hostile workbooks are not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; it is not a proof of spreadsheet safety.
+Most transformations still run on the legacy in-memory string table. Versioned projects can opt into a typed columnar pipeline for type-aware literal filtering and stable sorting, column selection and row windowing/removal, then preserve Arrow values, nulls, categorical dictionaries, labels and units through typed Parquet output. This does not yet provide typed editing, arithmetic expression execution, joins or aggregation. Large-data virtualization, general formula and regex transforms, multi-key/duplicate-aggregating pivots, project editor, undo, batch runs, other formats, authoritative palettes and full scientific export remain open. XLSX ZIP expansion and range allocation occur in the dependency before cell limit; hostile workbooks are not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; it is not a proof of spreadsheet safety.
 
 Hosted matrix, device, and packaging verification remain open. See [verification evidence](VERIFICATION.md) and [dependency review](DEPENDENCIES.md).

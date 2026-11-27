@@ -147,6 +147,127 @@ struct Column {
     metadata: ColumnMetadata,
 }
 
+fn parse_filter_value(column: &Column, literal: &str) -> Result<Option<Scalar>> {
+    if is_missing(literal) {
+        return Ok(Some(Scalar::Null));
+    }
+    let invalid = || {
+        Error::input(format!(
+            "Filter literal is incompatible with column {:?} ({:?})",
+            column.name, column.kind
+        ))
+    };
+    let parsed = match column.kind {
+        ColumnType::Null => return Err(invalid()),
+        ColumnType::Boolean => Scalar::Boolean(parse_boolean(literal).ok_or_else(invalid)?),
+        ColumnType::Int64 => Scalar::Int64(literal.trim().parse().map_err(|_| invalid())?),
+        ColumnType::UInt64 => Scalar::UInt64(literal.trim().parse().map_err(|_| invalid())?),
+        ColumnType::Float64 => {
+            let number = literal.trim().parse::<f64>().map_err(|_| invalid())?;
+            if !number.is_finite() {
+                return Err(invalid());
+            }
+            Scalar::Float64(number)
+        }
+        ColumnType::Date => Scalar::Date(parse_date(literal.trim()).ok_or_else(invalid)?),
+        ColumnType::Time => Scalar::Time(parse_time(literal.trim()).ok_or_else(invalid)?),
+        ColumnType::DateTime => {
+            Scalar::DateTime(parse_datetime(literal.trim()).ok_or_else(invalid)?)
+        }
+        ColumnType::Categorical => {
+            let Some(index) = column.categories.iter().position(|category| category == literal)
+            else {
+                return Ok(None);
+            };
+            Scalar::Categorical(u32::try_from(index).map_err(|_| {
+                Error::new(ErrorKind::Limit, "Too many categorical values")
+            })?)
+        }
+        ColumnType::String => Scalar::String(literal.to_owned()),
+    };
+    Ok(Some(parsed))
+}
+
+fn validate_datetime_ordering(column: &Column) -> Result<()> {
+    if column.kind != ColumnType::DateTime {
+        return Ok(());
+    }
+    let mut aware = None;
+    for value in &column.values {
+        if let Scalar::DateTime(datetime) = value {
+            let has_offset = datetime.offset_minutes.is_some();
+            if aware.is_some_and(|previous| previous != has_offset) {
+                return Err(Error::input(format!(
+                    "Datetime column {:?} mixes timezone-aware and timezone-naive values",
+                    column.name
+                )));
+            }
+            aware = Some(has_offset);
+        }
+    }
+    Ok(())
+}
+
+fn datetime_order_value(datetime: DateTime) -> i128 {
+    let seconds = i128::from(datetime.date.days_since_epoch()) * 86_400
+        + i128::from(datetime.time.seconds)
+        - i128::from(datetime.offset_minutes.unwrap_or(0)) * 60;
+    seconds * 1_000_000_000 + i128::from(datetime.time.nanoseconds)
+}
+
+fn compare_scalar(column: &Column, left: &Scalar, right: &Scalar) -> Result<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    if matches!(left, Scalar::Null) || matches!(right, Scalar::Null) {
+        return Ok(match (left, right) {
+            (Scalar::Null, Scalar::Null) => Ordering::Equal,
+            (Scalar::Null, _) => Ordering::Greater,
+            (_, Scalar::Null) => Ordering::Less,
+            _ => unreachable!(),
+        });
+    }
+    Ok(match (left, right) {
+        (Scalar::Boolean(a), Scalar::Boolean(b)) => a.cmp(b),
+        (Scalar::Int64(a), Scalar::Int64(b)) => a.cmp(b),
+        (Scalar::UInt64(a), Scalar::UInt64(b)) => a.cmp(b),
+        (Scalar::Float64(a), Scalar::Float64(b)) => {
+            if a == b {
+                Ordering::Equal
+            } else {
+                a.total_cmp(b)
+            }
+        }
+        (Scalar::Date(a), Scalar::Date(b)) => a.days_since_epoch().cmp(&b.days_since_epoch()),
+        (Scalar::Time(a), Scalar::Time(b)) => {
+            a.nanoseconds_since_midnight().cmp(&b.nanoseconds_since_midnight())
+        }
+        (Scalar::DateTime(a), Scalar::DateTime(b)) => {
+            if a.offset_minutes.is_some() != b.offset_minutes.is_some() {
+                return Err(Error::input(format!(
+                    "Filter datetime literal has different timezone semantics from column {:?}",
+                    column.name
+                )));
+            }
+            datetime_order_value(*a).cmp(&datetime_order_value(*b))
+        }
+        (Scalar::Categorical(a), Scalar::Categorical(b)) => {
+            let a = column.categories.get(*a as usize).ok_or_else(|| {
+                Error::input("Typed categorical index is outside its dictionary")
+            })?;
+            let b = column.categories.get(*b as usize).ok_or_else(|| {
+                Error::input("Typed categorical index is outside its dictionary")
+            })?;
+            a.cmp(b)
+        }
+        (Scalar::String(a), Scalar::String(b)) => a.cmp(b),
+        _ => {
+            return Err(Error::input(format!(
+                "Typed values do not match column {:?} schema",
+                column.name
+            )))
+        }
+    })
+}
+
 /// A bounded columnar typed view built from a text import without modifying source cells.
 #[derive(Debug)]
 pub(crate) struct TypedTable {
@@ -218,6 +339,166 @@ impl TypedTable {
         })
     }
 
+    /// Keep rows whose selected cell equals a literal parsed using that column's type.
+    pub(crate) fn filter_equal(&mut self, name: &str, literal: &str, job: &Job) -> Result<()> {
+        let index = self.column_index(name)?;
+        let column = &self.columns[index];
+        let expected = parse_filter_value(column, literal)?;
+        let mut keep = Vec::with_capacity(self.rows);
+        for value in &column.values {
+            job.check()?;
+            keep.push(match &expected {
+                None => false,
+                Some(expected) => {
+                    compare_scalar(column, value, expected)? == std::cmp::Ordering::Equal
+                }
+            });
+        }
+        self.retain_rows(&keep, job)
+    }
+
+    /// Stable, ascending sort using the typed value; nulls always sort after values.
+    pub(crate) fn sort_by(&mut self, name: &str, job: &Job) -> Result<()> {
+        let index = self.column_index(name)?;
+        let column = &self.columns[index];
+        validate_datetime_ordering(column)?;
+        let mut order = (0..self.rows).collect::<Vec<_>>();
+        let mut cancelled = false;
+        let mut comparison_error = None;
+        order.sort_by(|left, right| {
+            if job.check().is_err() {
+                cancelled = true;
+                return std::cmp::Ordering::Equal;
+            }
+            match compare_scalar(column, &column.values[*left], &column.values[*right]) {
+                Ok(ordering) => ordering,
+                Err(error) => {
+                    if comparison_error.is_none() {
+                        comparison_error = Some(error);
+                    }
+                    std::cmp::Ordering::Equal
+                }
+            }
+        });
+        if cancelled {
+            job.check()?;
+        }
+        if let Some(error) = comparison_error {
+            return Err(error);
+        }
+        self.reorder_rows(&order, job)
+    }
+
+    pub(crate) fn select_columns(&mut self, names: &[String], job: &Job) -> Result<()> {
+        if names.is_empty() {
+            return Err(Error::input("Select at least one column"));
+        }
+        let mut selected = Vec::with_capacity(names.len());
+        for name in names {
+            job.check()?;
+            let index = self.column_index(name)?;
+            if selected.contains(&index) {
+                return Err(Error::input("A column was selected more than once"));
+            }
+            selected.push(index);
+        }
+        let old = std::mem::take(&mut self.columns);
+        let mut slots = old.into_iter().map(Some).collect::<Vec<_>>();
+        self.columns = selected
+            .into_iter()
+            .map(|index| slots[index].take().expect("selected columns are unique"))
+            .collect();
+        Ok(())
+    }
+
+    pub(crate) fn drop_missing(&mut self, name: &str, job: &Job) -> Result<()> {
+        let index = self.column_index(name)?;
+        let mut keep = Vec::with_capacity(self.rows);
+        for value in &self.columns[index].values {
+            job.check()?;
+            keep.push(!matches!(value, Scalar::Null));
+        }
+        self.retain_rows(&keep, job)
+    }
+
+    pub(crate) fn drop_rows_any_missing(&mut self, job: &Job) -> Result<()> {
+        let mut keep = vec![true; self.rows];
+        for column in &self.columns {
+            for (row, value) in column.values.iter().enumerate() {
+                job.check()?;
+                if matches!(value, Scalar::Null) {
+                    keep[row] = false;
+                }
+            }
+        }
+        self.retain_rows(&keep, job)
+    }
+
+    pub(crate) fn head_rows(&mut self, count: usize, job: &Job) -> Result<()> {
+        let count = count.min(self.rows);
+        self.reorder_rows(&(0..count).collect::<Vec<_>>(), job)
+    }
+
+    pub(crate) fn tail_rows(&mut self, count: usize, job: &Job) -> Result<()> {
+        let start = self.rows.saturating_sub(count);
+        self.reorder_rows(&(start..self.rows).collect::<Vec<_>>(), job)
+    }
+
+    pub(crate) fn reverse_rows(&mut self, job: &Job) -> Result<()> {
+        self.reorder_rows(&(0..self.rows).rev().collect::<Vec<_>>(), job)
+    }
+
+    fn column_index(&self, name: &str) -> Result<usize> {
+        self.columns
+            .iter()
+            .position(|column| column.name == name)
+            .ok_or_else(|| Error::input(format!("Column {name:?} not found")))
+    }
+
+    fn retain_rows(&mut self, keep: &[bool], job: &Job) -> Result<()> {
+        if keep.len() != self.rows {
+            return Err(Error::input("Typed row selection has an invalid length"));
+        }
+        for column in &mut self.columns {
+            let mut row = 0;
+            let mut cancelled = false;
+            column.values.retain(|_| {
+                if job.check().is_err() {
+                    cancelled = true;
+                    return false;
+                }
+                let retain = keep[row];
+                row += 1;
+                retain
+            });
+            if cancelled {
+                job.check()?;
+            }
+        }
+        self.rows = keep.iter().filter(|retain| **retain).count();
+        Ok(())
+    }
+
+    fn reorder_rows(&mut self, order: &[usize], job: &Job) -> Result<()> {
+        if order.iter().any(|index| *index >= self.rows) {
+            return Err(Error::input("Typed row order contains an invalid index"));
+        }
+        for column in &mut self.columns {
+            let old = std::mem::take(&mut column.values);
+            let mut slots = old.into_iter().map(Some).collect::<Vec<_>>();
+            let mut reordered = Vec::with_capacity(order.len());
+            for index in order {
+                job.check()?;
+                reordered.push(slots[*index].take().ok_or_else(|| {
+                    Error::input("Typed row order contains a duplicate index")
+                })?);
+            }
+            column.values = reordered;
+        }
+        self.rows = order.len();
+        Ok(())
+    }
+
     pub(crate) fn schema_report(&self) -> serde_json::Value {
         let columns = self
             .columns
@@ -246,6 +527,29 @@ impl TypedTable {
             "rows": self.rows,
             "columns": columns,
             "missing_semantics": "empty or whitespace-only cells are null; other text is preserved",
+        })
+    }
+
+    pub(crate) fn preview_report(&self) -> serde_json::Value {
+        let preview = (0..self.rows.min(30))
+            .map(|row| {
+                self.columns
+                    .iter()
+                    .map(|column| {
+                        (
+                            column.name.clone(),
+                            value_json(&column.values[row], &column.categories)
+                                .unwrap_or(serde_json::Value::Null),
+                        )
+                    })
+                    .collect::<serde_json::Map<_, _>>()
+            })
+            .map(serde_json::Value::Object)
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "schema": self.schema_report(),
+            "rows": self.rows,
+            "preview": preview,
         })
     }
 
@@ -919,5 +1223,40 @@ mod tests {
         let typed = TypedTable::infer(&old, SchemaRequest::default(), &Job::new()).unwrap();
         assert!(typed.write_parquet(&output, &Job::new()).is_err());
         assert!(!output.exists());
+    }
+
+    #[test]
+    fn typed_sort_is_numeric_stable_and_places_nulls_last() {
+        let source = table(
+            vec!["value", "label"],
+            vec![
+                vec!["10", "first"],
+                vec!["2", "two"],
+                vec!["", "missing"],
+                vec!["2", "second"],
+            ],
+        );
+        let mut typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
+        typed.sort_by("value", &Job::new()).unwrap();
+        assert_eq!(
+            typed.columns[0].values,
+            [
+                Scalar::Int64(2),
+                Scalar::Int64(2),
+                Scalar::Int64(10),
+                Scalar::Null
+            ]
+        );
+        assert_eq!(
+            typed.columns[1]
+                .values
+                .iter()
+                .map(|value| match value {
+                    Scalar::String(value) => value.as_str(),
+                    _ => panic!("expected string cell"),
+                })
+                .collect::<Vec<_>>(),
+            ["two", "second", "first", "missing"]
+        );
     }
 }

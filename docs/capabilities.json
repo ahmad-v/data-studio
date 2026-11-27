@@ -148,12 +148,12 @@
     },
     {
       "operation": "run-project",
-      "description": "Replay an ordered version 1 data project against a local table",
+      "description": "Replay a version 1 text project or optional type-aware scalar filter, sort, row selection and row-window pipeline; typed results preserve Arrow schema in Parquet",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux x86_64 replay, CLI export and failed-step isolation passed"
+      "fixture_status": "Legacy Linux x86_64 replay, CLI export and failed-step isolation passed; typed numeric filter, typed stable sort, column selection, metadata preservation and failed-filter isolation fixture added; hosted verification pending"
     },
     {
       "operation": "select-sql",

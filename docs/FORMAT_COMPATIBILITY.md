@@ -18,7 +18,7 @@ No capability is marked device-verified or released. Linux and Windows hosted ch
 | left-join | Exact text key left outer join; duplicate matches expand; blank keys do not match | Linux fixture-tested |
 | right-join | Exact text key right outer join; right row order and unmatched blank-key rows retained | Linux fixture-tested |
 | full-join | Exact text full outer join; unmatched rows from both sides retained | Linux fixture-tested |
-| run-project | Replay declared table transformations from a versioned project | Linux fixture and CLI-tested |
+| run-project | Legacy text replay; typed schema-aware filter, sort, selection, missing-row removal, head/tail/reverse and Parquet output | Linux typed project fixture added; five-target verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | implemented-unverified |

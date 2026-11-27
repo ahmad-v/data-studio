@@ -1,4 +1,8 @@
-use super::{apply_step, Table};
+use super::{
+    apply_step,
+    typed::{SchemaRequest, TypedTable},
+    Table,
+};
 use localwright_core::{read_bounded, Error, Job, Result};
 use serde::Deserialize;
 use std::path::Path;
@@ -7,6 +11,8 @@ use std::path::Path;
 #[serde(deny_unknown_fields)]
 pub struct Project {
     schema_version: u32,
+    #[serde(default)]
+    typed_schema: Option<SchemaRequest>,
     pub worksheet: Option<String>,
     steps: Vec<Step>,
 }
@@ -229,6 +235,10 @@ impl Project {
         Ok(project)
     }
 
+    pub(crate) fn typed_schema(&self) -> Option<&SchemaRequest> {
+        self.typed_schema.as_ref()
+    }
+
     pub(super) fn run(self, mut table: Table, job: &Job) -> Result<(Table, usize, bool)> {
         let count = self.steps.len();
         let mut masked = false;
@@ -243,5 +253,36 @@ impl Project {
             })?;
         }
         Ok((table, count, masked))
+    }
+
+    pub(super) fn run_typed(
+        self,
+        mut table: TypedTable,
+        job: &Job,
+    ) -> Result<(TypedTable, usize)> {
+        let count = self.steps.len();
+        for (index, step) in self.steps.into_iter().enumerate() {
+            job.check()?;
+            let result = match step {
+                Step::Filter { column, value } => table.filter_equal(&column, &value, job),
+                Step::SelectColumns { columns } => table.select_columns(&columns, job),
+                Step::Sort { column } => table.sort_by(&column, job),
+                Step::DropMissing { column } => table.drop_missing(&column, job),
+                Step::DropRowsAnyMissing {} => table.drop_rows_any_missing(job),
+                Step::HeadRows { rows } => table.head_rows(rows, job),
+                Step::TailRows { rows } => table.tail_rows(rows, job),
+                Step::ReverseRows {} => table.reverse_rows(job),
+                _ => Err(Error::input(
+                    "This operation is not supported in a typed pipeline yet; use one of filter, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
+                )),
+            };
+            result.map_err(|error| {
+                Error::new(
+                    error.kind,
+                    format!("Typed project step {}: {}", index + 1, error.message),
+                )
+            })?;
+        }
+        Ok((table, count))
     }
 }
