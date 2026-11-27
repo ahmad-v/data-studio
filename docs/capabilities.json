@@ -483,6 +483,41 @@
       "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
     },
     {
+      "operation": "filter-number-greater",
+      "description": "Keep rows whose finite numeric cell is strictly greater than a threshold; blanks are excluded",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "filter-number-greater-equal",
+      "description": "Keep rows whose finite numeric cell is greater than or equal to a threshold; blanks are excluded",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "filter-number-less",
+      "description": "Keep rows whose finite numeric cell is strictly less than a threshold; blanks are excluded",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "filter-number-less-equal",
+      "description": "Keep rows whose finite numeric cell is less than or equal to a threshold; blanks are excluded",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "filter-number-between",
+      "description": "Keep rows whose finite numeric cell falls within inclusive ordered bounds; blanks are excluded",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
       "operation": "filter-contains-insensitive",
       "description": "Case-insensitive substring filter using Unicode lowercase mapping",
       "status": "implemented-unverified",

@@ -451,6 +451,101 @@ fn empty_column_removal_and_row_reversal_preserve_remaining_values() {
 }
 
 #[test]
+fn numeric_greater_filter_keeps_only_finite_values_above_threshold() {
+    let result = operation(
+        "score,label\n1,a\n2,b\n3,c\n,missing\n",
+        "filter-number-greater",
+        json!({"column":"score","value":2}),
+    );
+    assert_eq!(result["preview"], json!([["3", "c"]]));
+}
+
+#[test]
+fn numeric_greater_equal_filter_includes_the_threshold() {
+    let result = operation(
+        "score\n1\n2\n3\n",
+        "filter-number-greater-equal",
+        json!({"column":"score","value":2}),
+    );
+    assert_eq!(result["preview"], json!([["2"], ["3"]]));
+}
+
+#[test]
+fn numeric_less_filter_excludes_values_equal_to_threshold() {
+    let result = operation(
+        "score\n1\n2\n3\n",
+        "filter-number-less",
+        json!({"column":"score","value":2}),
+    );
+    assert_eq!(result["preview"], json!([["1"]]));
+}
+
+#[test]
+fn numeric_less_equal_filter_includes_the_threshold() {
+    let result = operation(
+        "score\n1\n2\n3\n",
+        "filter-number-less-equal",
+        json!({"column":"score","value":2}),
+    );
+    assert_eq!(result["preview"], json!([["1"], ["2"]]));
+}
+
+#[test]
+fn numeric_between_filter_has_inclusive_bounds_and_rejects_bad_data_or_bounds() {
+    let result = operation(
+        "score\n1\n2\n3\n4\n",
+        "filter-number-between",
+        json!({"column":"score","lower":2,"upper":3}),
+    );
+    assert_eq!(result["preview"], json!([["2"], ["3"]]));
+    assert!(fails(
+        "score\n1\ninvalid\n",
+        "filter-number-between",
+        json!({"column":"score","lower":0,"upper":2})
+    ));
+    assert!(fails(
+        "score\n1\n",
+        "filter-number-between",
+        json!({"column":"score","lower":2,"upper":1})
+    ));
+}
+
+#[test]
+fn all_five_numeric_filters_replay_in_a_version_one_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input.csv");
+    let project = dir.path().join("project.json");
+    fs::write(&input, "id,score\na,1\nb,2\nc,3\nd,4\ne,5\n").unwrap();
+    fs::write(
+        &project,
+        json!({"schema_version":1,"steps":[
+            {"operation":"filter-number-greater","column":"score","value":0},
+            {"operation":"filter-number-greater-equal","column":"score","value":1},
+            {"operation":"filter-number-less","column":"score","value":6},
+            {"operation":"filter-number-less-equal","column":"score","value":5},
+            {"operation":"filter-number-between","column":"score","lower":2,"upper":4}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let output = handle(
+        Request {
+            operation: "run-project".into(),
+            input,
+            parameter: project.to_string_lossy().into_owned(),
+            ..Request::default()
+        },
+        Job::new(),
+    )
+    .unwrap();
+    let result: Value = serde_json::from_str(&output.preview).unwrap();
+    assert_eq!(
+        result["preview"],
+        json!([["b", "2"], ["c", "3"], ["d", "4"]])
+    );
+}
+
+#[test]
 fn all_ten_added_operations_replay_in_order_in_a_project() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("input.csv");
