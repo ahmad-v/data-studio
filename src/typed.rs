@@ -2260,12 +2260,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("source.csv");
         let output = directory.path().join("result.csv");
-        std::fs::write(&input, "value,note\n-2.5,=SUM(1%2C2)\n,plain\n").unwrap();
+        std::fs::write(&input, "value,note\n-2.5,\"=SUM(1,2)\"\n,plain\n").unwrap();
         let typed =
             TypedTable::from_path(&input, None, SchemaRequest::default(), &Job::new()).unwrap();
         typed.write_delimited(&output, b',', &Job::new()).unwrap();
         let output = std::fs::read_to_string(&output).unwrap();
-        assert!(output.contains("-2.5,'=SUM(1%2C2)"));
+        assert!(output.contains("-2.5,\"'=SUM(1,2)\""));
         assert!(output.contains("\n,plain\n"));
     }
 
