@@ -1785,6 +1785,7 @@ mod tests {
             &project_path,
             r#"{
                 "schema_version": 1,
+                "typed_schema": {},
                 "steps": [{
                     "operation": "derive-numeric-column",
                     "name": "quotient",
