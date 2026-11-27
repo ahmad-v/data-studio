@@ -2039,7 +2039,7 @@ mod tests {
     }
 
     #[test]
-    fn basic_operations_use_typed_columns_for_parquet_and_keep_text_output_fallback() {
+    fn basic_operations_use_typed_columns_for_parquet_and_delimited_output() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("basic.csv");
         std::fs::write(&input, "id,score,label\n10,2,b\n2,10,a\n1,10,c\n, ,d\n").unwrap();
@@ -2104,11 +2104,11 @@ mod tests {
         assert_eq!(reader.schema().field(1).name(), "response");
         assert_eq!(reader.schema().field(1).data_type(), &DataType::Int64);
 
-        let legacy_output = dir.path().join("legacy.csv");
-        run("filter", "score=010", &legacy_output);
+        let delimited_output = dir.path().join("filtered.csv");
+        run("filter", "score=010", &delimited_output);
         assert_eq!(
-            std::fs::read_to_string(legacy_output).unwrap(),
-            "id,score,label\n"
+            std::fs::read_to_string(delimited_output).unwrap(),
+            "id,score,label\n2,10,a\n1,10,c\n"
         );
     }
 
