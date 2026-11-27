@@ -31,7 +31,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank."},
- Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware filter comparisons, stable typed sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join`, with `right_schema`), column selection and row windows; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware comparisons, stable sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), and typed `group-sum`/`group-mean`; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
@@ -1120,7 +1120,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 preview: preview.chars().take(24000).collect(),
                 written,
                 warnings: vec![format!(
-                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed pipelines support filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows and reverse-rows; joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
+                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed group-sum/group-mean preserve key type and metadata, group null keys together, omit null values and return null for all-missing groups. Typed pipelines support filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows and reverse-rows. Joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
                 )],
                 ..Outcome::default()
             });
@@ -1887,6 +1887,103 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("same typed column type"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn typed_project_group_sum_and_mean_preserve_group_schema_and_null_semantics() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("grouped.csv");
+        std::fs::write(&input, "group,value\nA,1\nB,4\nA,3\n,9\nC,\nC, \n").unwrap();
+
+        for (operation, aggregate_name, expected) in [
+            ("group-sum", "sum_value", [4.0, 4.0, 9.0, 0.0]),
+            ("group-mean", "mean_value", [2.0, 4.0, 9.0, 0.0]),
+        ] {
+            let project_path = dir.path().join(format!("{operation}.json"));
+            let output = dir.path().join(format!("{operation}.parquet"));
+            std::fs::write(
+                &project_path,
+                format!(
+                    r#"{{
+                        "schema_version": 1,
+                        "typed_schema": {{
+                            "overrides": {{"group": "categorical", "value": "int64"}},
+                            "metadata": {{
+                                "group": {{"label": "Study group"}},
+                                "value": {{"unit": "items"}}
+                            }}
+                        }},
+                        "steps": [{{
+                            "operation": "{operation}",
+                            "group_column": "group",
+                            "value_column": "value"
+                        }}]
+                    }}"#
+                ),
+            )
+            .unwrap();
+            handle(
+                Request {
+                    operation: "run-project".into(),
+                    input: input.clone(),
+                    output: output.clone(),
+                    parameter: project_path.to_string_lossy().into_owned(),
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+            .unwrap();
+
+            let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+            let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+            let schema = reader.schema();
+            assert_eq!(schema.field(0).name(), "group");
+            assert_eq!(schema.field(0).data_type(), &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)));
+            assert_eq!(schema.field(0).metadata()["localwright.label"], "Study group");
+            assert_eq!(schema.field(1).name(), aggregate_name);
+            assert_eq!(schema.field(1).data_type(), &DataType::Float64);
+            assert_eq!(schema.field(1).metadata()["localwright.unit"], "items");
+            let mut batches = reader.build().unwrap();
+            let batch = batches.next().unwrap().unwrap();
+            assert_eq!(batch.num_rows(), 4);
+            assert!(batch.column(0).is_null(2)); // Missing keys form one group.
+            let aggregate = batch.column(1).as_any().downcast_ref::<arrow_array::Float64Array>().unwrap();
+            assert_eq!(aggregate.value(0), expected[0]);
+            assert_eq!(aggregate.value(1), expected[1]);
+            assert_eq!(aggregate.value(2), expected[2]);
+            assert!(aggregate.is_null(3)); // All-missing numeric group remains null.
+        }
+    }
+
+    #[test]
+    fn typed_group_sum_overflow_does_not_create_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("overflow.csv");
+        let project_path = dir.path().join("overflow.json");
+        let output = dir.path().join("overflow.parquet");
+        std::fs::write(&input, "group,value\na,1e308\na,1e308\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {"overrides": {"group": "categorical", "value": "float64"}},
+                "steps": [{"operation": "group-sum", "group_column": "group", "value_column": "value"}]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("Sum overflow"));
         assert!(!output.exists());
     }
 

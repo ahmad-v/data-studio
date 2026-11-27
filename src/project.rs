@@ -329,6 +329,14 @@ impl Project {
                         Step::RenameColumn { column, name } => {
                             table.rename_column(&column, name)
                         }
+                        Step::GroupSum {
+                            group_column,
+                            value_column,
+                        } => table.group_numeric(&group_column, &value_column, false, job),
+                        Step::GroupMean {
+                            group_column,
+                            value_column,
+                        } => table.group_numeric(&group_column, &value_column, true, job),
                         Step::SelectColumns { columns } => table.select_columns(&columns, job),
                         Step::Sort { column } => table.sort_by(&column, job),
                         Step::DropMissing { column } => table.drop_missing(&column, job),
@@ -337,7 +345,7 @@ impl Project {
                         Step::TailRows { rows } => table.tail_rows(rows, job),
                         Step::ReverseRows {} => table.reverse_rows(job),
                         _ => Err(Error::input(
-                            "This operation is not supported in a typed pipeline yet; use filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
+                            "This operation is not supported in a typed pipeline yet; use filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
                         )),
                     };
                     result.map(|()| table)

@@ -910,6 +910,136 @@ impl TypedTable {
         })
     }
 
+    /// Aggregate one numeric column by typed key, retaining first-seen group order.
+    /// Null keys form one group; null values are omitted, and all-null groups yield null.
+    pub(crate) fn group_numeric(
+        &mut self,
+        group_name: &str,
+        value_name: &str,
+        mean: bool,
+        job: &Job,
+    ) -> Result<()> {
+        struct Accumulator {
+            key: Scalar,
+            sum: f64,
+            mean: f64,
+            count: usize,
+        }
+
+        let group_index = self.column_index(group_name)?;
+        let value_index = self.column_index(value_name)?;
+        let group_column = &self.columns[group_index];
+        let value_column = &self.columns[value_index];
+        if !matches!(
+            value_column.kind,
+            ColumnType::Int64 | ColumnType::UInt64 | ColumnType::Float64
+        ) {
+            return Err(Error::input(format!(
+                "Aggregation column {value_name:?} must have a numeric type"
+            )));
+        }
+        let aggregate_name = format!("{}_{}", if mean { "mean" } else { "sum" }, value_name);
+        validate_column_name(&aggregate_name)?;
+        if aggregate_name == group_name {
+            return Err(Error::input(
+                "Generated aggregation column conflicts with the group column",
+            ));
+        }
+
+        let mut lookup = HashMap::<String, usize>::new();
+        let mut groups = Vec::<Accumulator>::new();
+        for row in 0..self.rows {
+            job.check()?;
+            let key_value = &group_column.values[row];
+            let key = typed_join_key(group_column, key_value)?.unwrap_or_else(|| "n:".into());
+            let group_index = if let Some(index) = lookup.get(&key) {
+                *index
+            } else {
+                if groups.len() >= MAX_CELLS / 2 {
+                    return Err(Error::new(
+                        ErrorKind::Limit,
+                        "Grouped output exceeds the typed table cell limit",
+                    ));
+                }
+                let index = groups.len();
+                lookup.insert(key, index);
+                groups.push(Accumulator {
+                    key: key_value.clone(),
+                    sum: 0.0,
+                    mean: 0.0,
+                    count: 0,
+                });
+                index
+            };
+            let Some(value) = scalar_to_f64(value_column, &value_column.values[row]).map_err(
+                |error| {
+                    Error::new(
+                        error.kind,
+                        format!("Aggregation failed on row {}: {}", row + 1, error.message),
+                    )
+                },
+            )? else {
+                continue;
+            };
+            let group = &mut groups[group_index];
+            let next_count = group.count.checked_add(1).ok_or_else(|| {
+                Error::new(ErrorKind::Limit, "Grouped value count exceeds the supported range")
+            })?;
+            if mean {
+                let result = if group.count == 0 {
+                    value
+                } else {
+                    let divisor = next_count as f64;
+                    group.mean * (group.count as f64 / divisor) + value / divisor
+                };
+                group.mean = finite_numeric_result(result).map_err(|error| {
+                    Error::new(
+                        error.kind,
+                        format!("Mean overflow in group on row {}", row + 1),
+                    )
+                })?;
+            } else {
+                group.sum = finite_numeric_result(group.sum + value).map_err(|error| {
+                    Error::new(
+                        error.kind,
+                        format!("Sum overflow in group on row {}", row + 1),
+                    )
+                })?;
+            }
+            group.count = next_count;
+        }
+
+        let mut key_output = group_column.clone();
+        key_output.values = groups.iter().map(|group| group.key.clone()).collect();
+        let aggregate_values = groups
+            .iter()
+            .map(|group| {
+                if group.count == 0 {
+                    Scalar::Null
+                } else {
+                    Scalar::Float64(if mean { group.mean } else { group.sum })
+                }
+            })
+            .collect::<Vec<_>>();
+        let metadata = ColumnMetadata {
+            label: Some(aggregate_name.clone()),
+            unit: value_column.metadata.unit.clone(),
+        };
+        validate_metadata(&metadata)?;
+        let aggregate_column = Column {
+            name: aggregate_name,
+            kind: ColumnType::Float64,
+            values: aggregate_values,
+            categories: Vec::new(),
+            metadata,
+        };
+        *self = Self {
+            columns: vec![key_output, aggregate_column],
+            rows: groups.len(),
+        };
+        Ok(())
+    }
+
     /// Stable, ascending sort using the typed value; nulls always sort after values.
     pub(crate) fn sort_by(&mut self, name: &str, job: &Job) -> Result<()> {
         let index = self.column_index(name)?;
