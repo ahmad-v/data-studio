@@ -431,6 +431,11 @@ fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
         | Step::FillBackward { .. }
         | Step::DropEmptyColumns { .. }
         | Step::ReverseRows { .. }) => return transform::apply(table, step, job),
+        Step::FilterCompare { .. } | Step::DeriveNumericColumn { .. } => {
+            return Err(Error::input(
+                "Typed project steps require a project with typed_schema",
+            ))
+        }
         Step::SelectColumns { columns } => {
             return select_columns(table, columns.iter().map(String::as_str), job)
         }
@@ -1804,6 +1809,41 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("division by zero"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn typed_steps_require_opt_in_without_changing_legacy_project_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let project_path = dir.path().join("project.json");
+        let output = dir.path().join("result.csv");
+        std::fs::write(&input, "score\n10\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "steps": [{
+                    "operation": "filter-compare",
+                    "column": "score",
+                    "comparison": "gte",
+                    "value": "10"
+                }]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("require a project with typed_schema"));
         assert!(!output.exists());
     }
 
