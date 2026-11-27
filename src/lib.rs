@@ -1060,12 +1060,8 @@ fn try_typed_basic_operation(
     let Some(step) = request_step(operation, parameter)? else {
         return Ok(None);
     };
-    let mut table = typed::TypedTable::from_path(
-        input,
-        None,
-        typed::SchemaRequest::default(),
-        job,
-    )?;
+    let mut table =
+        typed::TypedTable::from_path(input, None, typed::SchemaRequest::default(), job)?;
     match step {
         Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
         Step::Sort { column } => table.sort_by(&column, job)?,
@@ -1110,13 +1106,9 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             "Project worksheet selection requires XLSX input",
         ));
     }
-    if let Some(outcome) = try_typed_basic_operation(
-        &r.operation,
-        &r.parameter,
-        &r.input,
-        &r.output,
-        &j,
-    )? {
+    if let Some(outcome) =
+        try_typed_basic_operation(&r.operation, &r.parameter, &r.input, &r.output, &j)?
+    {
         return Ok(outcome);
     }
     if r.operation == "inspect-schema" {
@@ -2066,7 +2058,15 @@ mod tests {
         let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
         let mut batches = reader.build().unwrap();
         let batch = batches.next().unwrap().unwrap();
-        assert_eq!(batch.column(0).as_any().downcast_ref::<arrow_array::Int64Array>().unwrap().values(), &[2, 1]);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow_array::Int64Array>()
+                .unwrap()
+                .values(),
+            &[2, 1]
+        );
 
         let sorted = dir.path().join("sorted.parquet");
         run("sort", "id", &sorted);
@@ -2075,7 +2075,11 @@ mod tests {
         assert_eq!(reader.schema().field(0).data_type(), &DataType::Int64);
         let mut batches = reader.build().unwrap();
         let batch = batches.next().unwrap().unwrap();
-        let ids = batch.column(0).as_any().downcast_ref::<arrow_array::Int64Array>().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
         assert_eq!(&ids.values()[..3], &[1, 2, 10]);
         assert!(ids.is_null(3));
 
@@ -2130,7 +2134,11 @@ mod tests {
         let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
         let mut batches = reader.build().unwrap();
         let batch = batches.next().unwrap().unwrap();
-        let ids = batch.column(0).as_any().downcast_ref::<arrow_array::Int64Array>().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
         assert_eq!(ids.values(), &[2, 10]);
     }
 
