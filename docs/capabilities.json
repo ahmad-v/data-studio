@@ -148,12 +148,12 @@
     },
     {
       "operation": "run-project",
-      "description": "Replay a version 1 text project or optional typed comparison and bounded numeric-expression pipeline with Arrow-preserving Parquet output",
+      "description": "Replay version 1 text projects or typed pipelines with comparisons, bounded numeric expressions, schema-preserving rename and type-checked inner joins with Arrow-preserving Parquet output",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; added typed numeric expression, numeric comparison, null propagation, metadata round-trip, stable sorting and failed-step isolation tests; hosted verification pending"
+      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; typed numeric expressions, comparisons, null propagation, metadata round-trip, stable sorting, type-preserving rename and typed inner-join fixtures are implemented; hosted verification pending"
     },
     {
       "operation": "select-sql",

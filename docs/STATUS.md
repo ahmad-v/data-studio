@@ -20,7 +20,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | left-join | Left outer join with duplicate-key expansion and blank-key nonmatching | Linux fixture-tested |
 | right-join | Right outer join preserving right input order and every unmatched row | Linux fixture-tested |
 | full-join | Full outer join preserving unmatched rows from both tables | Linux fixture-tested |
-| run-project | Replay text projects unchanged; optional `typed_schema` enables typed comparisons, bounded numeric expression columns, typed sorting, selection and row windows while preserving Parquet schema and nulls | Linux tests cover numeric comparison, expression null propagation, metadata retention, division-by-zero recovery and typed Parquet output; hosted verification pending |
+| run-project | Replay text projects unchanged; optional `typed_schema` enables typed comparisons, bounded numeric expressions, rename, type-preserving inner join, typed sorting, selection and row windows while preserving Parquet schema, nulls, categories and metadata | Existing tests cover comparisons, expression errors, metadata, schema-preserving rename/join, null join behavior and failure isolation; hosted verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |

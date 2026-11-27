@@ -1,11 +1,11 @@
 use super::{
-    apply_step,
+    apply_step, load,
     typed::{ColumnMetadata, NumericExpr, SchemaRequest, TypedComparison, TypedTable},
     Table,
 };
 use localwright_core::{read_bounded, Error, Job, Result};
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -15,6 +15,8 @@ pub struct Project {
     typed_schema: Option<SchemaRequest>,
     pub worksheet: Option<String>,
     steps: Vec<Step>,
+    #[serde(skip)]
+    project_directory: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -57,6 +59,12 @@ pub enum Step {
     RenameColumn {
         column: String,
         name: String,
+    },
+    TypedInnerJoin {
+        right_path: PathBuf,
+        left_key: String,
+        right_key: String,
+        right_schema: SchemaRequest,
     },
     RecodeValues {
         column: String,
@@ -238,13 +246,18 @@ pub enum Step {
 
 impl Project {
     pub fn open(path: &Path) -> Result<Self> {
-        let project: Self = serde_json::from_slice(&read_bounded(path, 128 * 1024)?)?;
+        let mut project: Self = serde_json::from_slice(&read_bounded(path, 128 * 1024)?)?;
         if project.schema_version != 1 {
             return Err(Error::input("Unsupported data project version"));
         }
         if !(1..=32).contains(&project.steps.len()) {
             return Err(Error::input("Data projects require 1 to 32 steps"));
         }
+        project.project_directory = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
         Ok(project)
     }
 
@@ -290,6 +303,25 @@ impl Project {
                     ColumnMetadata { label, unit },
                     job,
                 ),
+                Step::RenameColumn { column, name } => table.rename_column(&column, name),
+                Step::TypedInnerJoin {
+                    right_path,
+                    left_key,
+                    right_key,
+                    right_schema,
+                } => {
+                    (|| {
+                        let path = if right_path.is_absolute() {
+                            right_path
+                        } else {
+                            self.project_directory.join(right_path)
+                        };
+                        let source = load(&path, None, job)?;
+                        let right = TypedTable::infer(&source, right_schema, job)?;
+                        table = table.inner_join(right, &left_key, &right_key, job)?;
+                        Ok(())
+                    })()
+                }
                 Step::SelectColumns { columns } => table.select_columns(&columns, job),
                 Step::Sort { column } => table.sort_by(&column, job),
                 Step::DropMissing { column } => table.drop_missing(&column, job),
@@ -298,7 +330,7 @@ impl Project {
                 Step::TailRows { rows } => table.tail_rows(rows, job),
                 Step::ReverseRows {} => table.reverse_rows(job),
                 _ => Err(Error::input(
-                    "This operation is not supported in a typed pipeline yet; use filter, filter-compare, derive-numeric-column, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
+                    "This operation is not supported in a typed pipeline yet; use filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
                 )),
             };
             result.map_err(|error| {

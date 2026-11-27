@@ -31,7 +31,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank."},
- Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware filter comparisons, stable typed sorts, bounded numeric expressions, column selection and row windows; save results to a new .parquet file. Projects without typed_schema keep their existing text behavior."#},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware filter comparisons, stable typed sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join`, with `right_schema`), column selection and row windows; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
@@ -431,7 +431,9 @@ fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
         | Step::FillBackward { .. }
         | Step::DropEmptyColumns { .. }
         | Step::ReverseRows { .. }) => return transform::apply(table, step, job),
-        Step::FilterCompare { .. } | Step::DeriveNumericColumn { .. } => {
+        Step::FilterCompare { .. }
+        | Step::DeriveNumericColumn { .. }
+        | Step::TypedInnerJoin { .. } => {
             return Err(Error::input(
                 "Typed project steps require a project with typed_schema",
             ))
@@ -1118,7 +1120,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 preview: preview.chars().take(24000).collect(),
                 written,
                 warnings: vec![format!(
-                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed pipelines support filter, filter-compare, derive-numeric-column, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows and reverse-rows; the original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
+                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed pipelines support filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows and reverse-rows; joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
                 )],
                 ..Outcome::default()
             });
@@ -1772,6 +1774,109 @@ mod tests {
             .unwrap();
         assert_eq!(ids.values(), &[2, 4]);
         assert_eq!(totals.values(), &[11.0, 20.0]);
+    }
+
+    #[test]
+    fn typed_project_renames_and_inner_joins_preserving_types_nulls_and_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("left.csv");
+        let right = dir.path().join("right.csv");
+        let project_path = dir.path().join("project.json");
+        let output = dir.path().join("joined.parquet");
+        std::fs::write(&input, "id,score\n2,1.5\n3,\n,9\n").unwrap();
+        std::fs::write(&right, "key,site\n2,north\n2,south\n3,west\n,unknown\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {
+                    "overrides": {"id": "int64", "score": "float64"},
+                    "metadata": {"score": {"label": "Response", "unit": "points"}}
+                },
+                "steps": [
+                    {"operation": "rename-column", "column": "score", "name": "response"},
+                    {
+                        "operation": "typed-inner-join",
+                        "right_path": "right.csv",
+                        "left_key": "id",
+                        "right_key": "key",
+                        "right_schema": {"overrides": {"key": "int64", "site": "categorical"}}
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+        handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let schema = reader.schema();
+        assert_eq!(schema.field(0).name(), "id");
+        assert_eq!(schema.field(0).data_type(), &DataType::Int64);
+        assert_eq!(schema.field(1).name(), "response");
+        assert_eq!(schema.field(1).data_type(), &DataType::Float64);
+        assert_eq!(schema.field(1).metadata()["localwright.label"], "Response");
+        assert_eq!(schema.field(1).metadata()["localwright.unit"], "points");
+        assert_eq!(schema.field(2).name(), "right.site");
+        assert_eq!(schema.field(2).data_type(), &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)));
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        let ids = batch.column(0).as_any().downcast_ref::<arrow_array::Int64Array>().unwrap();
+        assert_eq!(ids.values(), &[2, 2, 3]);
+        let scores = batch.column(1).as_any().downcast_ref::<arrow_array::Float64Array>().unwrap();
+        assert_eq!(scores.value(0), 1.5);
+        assert_eq!(scores.value(1), 1.5);
+        assert!(scores.is_null(2));
+    }
+
+    #[test]
+    fn typed_join_rejects_incompatible_keys_without_creating_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("left.csv");
+        let right = dir.path().join("right.csv");
+        let project_path = dir.path().join("project.json");
+        let output = dir.path().join("joined.parquet");
+        std::fs::write(&input, "id\n2\n").unwrap();
+        std::fs::write(&right, "key\n2\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {"overrides": {"id": "int64"}},
+                "steps": [{
+                    "operation": "typed-inner-join",
+                    "right_path": "right.csv",
+                    "left_key": "id",
+                    "right_key": "key",
+                    "right_schema": {"overrides": {"key": "string"}}
+                }]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("same typed column type"));
+        assert!(!output.exists());
     }
 
     #[test]
