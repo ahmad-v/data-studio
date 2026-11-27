@@ -84,7 +84,25 @@ To keep schema and nulls through a supported transformation subset, add `typed_s
 }
 ```
 
-The typed subset supports `filter`, `sort`, `select-columns`, `drop-missing`, `drop-rows-any-missing`, `head-rows`, `tail-rows` and `reverse-rows`. Filter literals are parsed using the selected column type. Sorts use typed ordering with nulls last and preserve input order for ties. Categorical values sort by their text labels. An incompatible filter or mixed timezone-aware and naive datetime sort fails the project without writing a partial output. Other operations currently return a step-specific unsupported-operation error in typed mode. The typed Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units; the source remains untouched.
+The typed subset supports `filter`, `filter-compare`, `derive-numeric-column`, `sort`, `select-columns`, `drop-missing`, `drop-rows-any-missing`, `head-rows`, `tail-rows` and `reverse-rows`. Filter literals are parsed using the selected column type. `filter-compare` accepts `eq`, `ne`, `lt`, `lte`, `gt` and `gte`. Null equals a missing literal only with `eq`; other comparisons exclude null rows. Sorts use typed ordering with nulls last and preserve input order for ties. Categorical values sort by their text labels. An incompatible filter or mixed timezone-aware and naive datetime sort fails the project without writing a partial output.
+
+A numeric expression can reference numeric columns and finite literals:
+
+```json
+{
+  "operation": "derive-numeric-column",
+  "name": "total",
+  "label": "Total response",
+  "unit": "points",
+  "expression": {
+    "op": "add",
+    "left": {"op": "column", "name": "score"},
+    "right": {"op": "literal", "value": 2.0}
+  }
+}
+```
+
+Expression nodes support `add`, `subtract`, `multiply`, `divide`, `negate`, `absolute`, `square_root`, `log10`, `round` and `clip`. `round` takes `decimal_places` from -12 through 12; `clip` takes finite ordered `minimum` and `maximum` bounds. Expressions are limited to depth 16 and 64 nodes. Results are float64, arithmetic nulls propagate, and division by zero, invalid domains, overflow and non-finite values fail with the source row number. Integer inputs must be within the exactly representable float64 range (absolute value at most 2^53); this prevents silently rounded integer values. Output is written only after the whole project succeeds. Other transformations currently return a step-specific unsupported-operation error in typed mode. Typed Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units; the source remains untouched.
 
 ## Join two tables
 

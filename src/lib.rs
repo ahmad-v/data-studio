@@ -31,7 +31,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank."},
- Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed pipelines preserve nulls and schema through filter, sort, select-columns, missing-row removal, head, tail and reverse steps; save typed output to a new .parquet file. Projects without typed_schema keep their existing text behavior."#},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware filter comparisons, stable typed sorts, bounded numeric expressions, column selection and row windows; save results to a new .parquet file. Projects without typed_schema keep their existing text behavior."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
@@ -1113,7 +1113,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 preview: preview.chars().take(24000).collect(),
                 written,
                 warnings: vec![format!(
-                    "Applied {steps} typed project steps. Filters and sorts use the declared or inferred column types; nulls sort last. Values, categorical dictionaries, nulls, labels and units remain typed in Parquet output. Whitespace-only source cells are null. Typed pipelines currently support filter, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows and reverse-rows; the original source is unchanged."
+                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed pipelines support filter, filter-compare, derive-numeric-column, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows and reverse-rows; the original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
                 )],
                 ..Outcome::default()
             });
@@ -1681,6 +1681,126 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("incompatible with column"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn typed_project_derives_numeric_expression_and_filters_with_typed_comparison() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("expression-input.csv");
+        let project_path = dir.path().join("expression-project.json");
+        let output = dir.path().join("expression-result.parquet");
+        let original = concat!(
+            "id,base,delta\n",
+            "3,2,4\n",
+            "2,10,1\n",
+            "1,,2\n",
+            "4,20,0\n",
+        );
+        std::fs::write(&input, original).unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {
+                    "overrides": {"base": "float64", "delta": "float64"}
+                },
+                "steps": [
+                    {
+                        "operation": "derive-numeric-column",
+                        "name": "total",
+                        "label": "Total response",
+                        "unit": "points",
+                        "expression": {
+                            "op": "add",
+                            "left": {"op": "column", "name": "base"},
+                            "right": {"op": "column", "name": "delta"}
+                        }
+                    },
+                    {
+                        "operation": "filter-compare",
+                        "column": "total",
+                        "comparison": "gte",
+                        "value": "10"
+                    },
+                    {"operation": "sort", "column": "id"},
+                    {"operation": "select-columns", "columns": ["id", "total"]}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let result = handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(result.written, Some(output.clone()));
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let schema = reader.schema();
+        assert_eq!(schema.field(0).data_type(), &DataType::Int64);
+        assert_eq!(schema.field(1).data_type(), &DataType::Float64);
+        assert_eq!(schema.field(1).metadata()["localwright.label"], "Total response");
+        assert_eq!(schema.field(1).metadata()["localwright.unit"], "points");
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        let totals = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::Float64Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[2, 4]);
+        assert_eq!(totals.values(), &[11.0, 20.0]);
+    }
+
+    #[test]
+    fn typed_project_numeric_expression_failure_does_not_write_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("expression-input.csv");
+        let project_path = dir.path().join("expression-project.json");
+        let output = dir.path().join("expression-result.parquet");
+        std::fs::write(&input, "value\n4\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "steps": [{
+                    "operation": "derive-numeric-column",
+                    "name": "quotient",
+                    "expression": {
+                        "op": "divide",
+                        "left": {"op": "column", "name": "value"},
+                        "right": {"op": "literal", "value": 0.0}
+                    }
+                }]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("division by zero"));
         assert!(!output.exists());
     }
 

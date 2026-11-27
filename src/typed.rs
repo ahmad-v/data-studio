@@ -68,6 +68,35 @@ impl SchemaRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TypedComparison {
+    Eq,
+    Ne,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+}
+
+/// Bounded, declarative arithmetic expression used by typed project pipelines.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum NumericExpr {
+    Literal { value: f64 },
+    Column { name: String },
+    Add { left: Box<Self>, right: Box<Self> },
+    Subtract { left: Box<Self>, right: Box<Self> },
+    Multiply { left: Box<Self>, right: Box<Self> },
+    Divide { left: Box<Self>, right: Box<Self> },
+    Negate { value: Box<Self> },
+    Absolute { value: Box<Self> },
+    SquareRoot { value: Box<Self> },
+    Log10 { value: Box<Self> },
+    Round { value: Box<Self>, decimal_places: i32 },
+    Clip { value: Box<Self>, minimum: f64, maximum: f64 },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Scalar {
     Null,
@@ -147,9 +176,9 @@ struct Column {
     metadata: ColumnMetadata,
 }
 
-fn parse_filter_value(column: &Column, literal: &str) -> Result<Option<Scalar>> {
+fn parse_filter_value(column: &Column, literal: &str) -> Result<Scalar> {
     if is_missing(literal) {
-        return Ok(Some(Scalar::Null));
+        return Ok(Scalar::Null);
     }
     let invalid = || {
         Error::input(format!(
@@ -180,7 +209,7 @@ fn parse_filter_value(column: &Column, literal: &str) -> Result<Option<Scalar>> 
                 .iter()
                 .position(|category| category == literal)
             else {
-                return Ok(None);
+                return Ok(Scalar::String(literal.to_owned()));
             };
             Scalar::Categorical(
                 u32::try_from(index)
@@ -189,7 +218,7 @@ fn parse_filter_value(column: &Column, literal: &str) -> Result<Option<Scalar>> 
         }
         ColumnType::String => Scalar::String(literal.to_owned()),
     };
-    Ok(Some(parsed))
+    Ok(parsed)
 }
 
 fn validate_datetime_ordering(column: &Column) -> Result<()> {
@@ -264,6 +293,17 @@ fn compare_scalar(column: &Column, left: &Scalar, right: &Scalar) -> Result<std:
                 .ok_or_else(|| Error::input("Typed categorical index is outside its dictionary"))?;
             a.cmp(b)
         }
+        (Scalar::Categorical(a), Scalar::String(b)) => column
+            .categories
+            .get(*a as usize)
+            .ok_or_else(|| Error::input("Typed categorical index is outside its dictionary"))?
+            .cmp(b),
+        (Scalar::String(a), Scalar::Categorical(b)) => a.cmp(
+            column
+                .categories
+                .get(*b as usize)
+                .ok_or_else(|| Error::input("Typed categorical index is outside its dictionary"))?,
+        ),
         (Scalar::String(a), Scalar::String(b)) => a.cmp(b),
         _ => {
             return Err(Error::input(format!(
@@ -272,6 +312,216 @@ fn compare_scalar(column: &Column, left: &Scalar, right: &Scalar) -> Result<std:
             )))
         }
     })
+}
+
+const MAX_NUMERIC_EXPRESSION_DEPTH: usize = 16;
+const MAX_NUMERIC_EXPRESSION_NODES: usize = 64;
+const MAX_EXACT_FLOAT64_INTEGER: u64 = 9_007_199_254_740_992;
+
+fn validate_metadata(metadata: &ColumnMetadata) -> Result<()> {
+    for value in [&metadata.label, &metadata.unit].into_iter().flatten() {
+        if value.chars().count() > MAX_METADATA_CHARS || value.chars().any(char::is_control) {
+            return Err(Error::input(
+                "Column labels and units must be printable and at most 256 characters",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_numeric_expression(
+    expression: &NumericExpr,
+    table: &TypedTable,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<()> {
+    *nodes += 1;
+    if depth > MAX_NUMERIC_EXPRESSION_DEPTH || *nodes > MAX_NUMERIC_EXPRESSION_NODES {
+        return Err(Error::new(
+            ErrorKind::Limit,
+            "Numeric expressions are limited to depth 16 and 64 nodes",
+        ));
+    }
+    match expression {
+        NumericExpr::Literal { value } if !value.is_finite() => {
+            return Err(Error::input("Numeric expression literals must be finite"));
+        }
+        NumericExpr::Column { name } => {
+            let index = table.column_index(name)?;
+            if !matches!(
+                table.columns[index].kind,
+                ColumnType::Int64 | ColumnType::UInt64 | ColumnType::Float64
+            ) {
+                return Err(Error::input(format!(
+                    "Numeric expression column {name:?} must have a numeric type"
+                )));
+            }
+        }
+        NumericExpr::Add { left, right }
+        | NumericExpr::Subtract { left, right }
+        | NumericExpr::Multiply { left, right }
+        | NumericExpr::Divide { left, right } => {
+            validate_numeric_expression(left, table, depth + 1, nodes)?;
+            validate_numeric_expression(right, table, depth + 1, nodes)?;
+        }
+        NumericExpr::Negate { value }
+        | NumericExpr::Absolute { value }
+        | NumericExpr::SquareRoot { value }
+        | NumericExpr::Log10 { value } => {
+            validate_numeric_expression(value, table, depth + 1, nodes)?;
+        }
+        NumericExpr::Round {
+            value,
+            decimal_places,
+        } => {
+            if !(-12..=12).contains(decimal_places) {
+                return Err(Error::input(
+                    "Numeric expression round precision must be from -12 through 12",
+                ));
+            }
+            validate_numeric_expression(value, table, depth + 1, nodes)?;
+        }
+        NumericExpr::Clip {
+            value,
+            minimum,
+            maximum,
+        } => {
+            if !minimum.is_finite() || !maximum.is_finite() || minimum > maximum {
+                return Err(Error::input(
+                    "Numeric expression clip bounds must be finite and ordered",
+                ));
+            }
+            validate_numeric_expression(value, table, depth + 1, nodes)?;
+        }
+        NumericExpr::Literal { .. } => {}
+    }
+    Ok(())
+}
+
+fn scalar_to_f64(column: &Column, value: &Scalar) -> Result<Option<f64>> {
+    match value {
+        Scalar::Null => Ok(None),
+        Scalar::Int64(value) if value.unsigned_abs() <= MAX_EXACT_FLOAT64_INTEGER => {
+            Ok(Some(*value as f64))
+        }
+        Scalar::UInt64(value) if *value <= MAX_EXACT_FLOAT64_INTEGER => Ok(Some(*value as f64)),
+        Scalar::Float64(value) if value.is_finite() => Ok(Some(*value)),
+        Scalar::Int64(_) | Scalar::UInt64(_) => Err(Error::input(format!(
+            "Integer in column {:?} exceeds the exact float64 expression range",
+            column.name
+        ))),
+        _ => Err(Error::input(format!(
+            "Value in column {:?} is not a finite numeric value",
+            column.name
+        ))),
+    }
+}
+
+fn finite_numeric_result(value: f64) -> Result<f64> {
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or_else(|| Error::input("Numeric expression produced a non-finite result"))
+}
+
+fn evaluate_numeric_unary(
+    expression: &NumericExpr,
+    table: &TypedTable,
+    row: usize,
+    operation: impl Fn(f64) -> Result<f64>,
+) -> Result<Option<f64>> {
+    evaluate_numeric_expression(expression, table, row)?
+        .map(|value| operation(value).and_then(finite_numeric_result))
+        .transpose()
+}
+
+fn evaluate_numeric_binary(
+    left: &NumericExpr,
+    right: &NumericExpr,
+    table: &TypedTable,
+    row: usize,
+    operation: impl Fn(f64, f64) -> f64,
+) -> Result<Option<f64>> {
+    let left = evaluate_numeric_expression(left, table, row)?;
+    let right = evaluate_numeric_expression(right, table, row)?;
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            finite_numeric_result(operation(left, right)).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn evaluate_numeric_expression(
+    expression: &NumericExpr,
+    table: &TypedTable,
+    row: usize,
+) -> Result<Option<f64>> {
+    match expression {
+        NumericExpr::Literal { value } => finite_numeric_result(*value).map(Some),
+        NumericExpr::Column { name } => {
+            let index = table.column_index(name)?;
+            scalar_to_f64(&table.columns[index], &table.columns[index].values[row])
+        }
+        NumericExpr::Add { left, right } => {
+            evaluate_numeric_binary(left, right, table, row, |a, b| a + b)
+        }
+        NumericExpr::Subtract { left, right } => {
+            evaluate_numeric_binary(left, right, table, row, |a, b| a - b)
+        }
+        NumericExpr::Multiply { left, right } => {
+            evaluate_numeric_binary(left, right, table, row, |a, b| a * b)
+        }
+        NumericExpr::Divide { left, right } => {
+            let left = evaluate_numeric_expression(left, table, row)?;
+            let right = evaluate_numeric_expression(right, table, row)?;
+            match (left, right) {
+                (Some(_), Some(right)) if right == 0.0 => {
+                    Err(Error::input("Numeric expression division by zero"))
+                }
+                (Some(left), Some(right)) => finite_numeric_result(left / right).map(Some),
+                _ => Ok(None),
+            }
+        }
+        NumericExpr::Negate { value } => {
+            evaluate_numeric_unary(value, table, row, |value| Ok(-value))
+        }
+        NumericExpr::Absolute { value } => {
+            evaluate_numeric_unary(value, table, row, |value| Ok(value.abs()))
+        }
+        NumericExpr::SquareRoot { value } => evaluate_numeric_unary(value, table, row, |value| {
+            if value < 0.0 {
+                Err(Error::input("Numeric expression square root requires a nonnegative value"))
+            } else {
+                Ok(value.sqrt())
+            }
+        }),
+        NumericExpr::Log10 { value } => evaluate_numeric_unary(value, table, row, |value| {
+            if value <= 0.0 {
+                Err(Error::input("Numeric expression log10 requires a positive value"))
+            } else {
+                Ok(value.log10())
+            }
+        }),
+        NumericExpr::Round {
+            value,
+            decimal_places,
+        } => evaluate_numeric_unary(value, table, row, |value| {
+            let factor = 10.0_f64.powi(*decimal_places);
+            let scaled = value * factor;
+            if !scaled.is_finite() {
+                return Err(Error::input("Numeric expression rounding overflowed"));
+            }
+            Ok(scaled.round() / factor)
+        }),
+        NumericExpr::Clip {
+            value,
+            minimum,
+            maximum,
+        } => evaluate_numeric_unary(value, table, row, |value| {
+            Ok(value.clamp(*minimum, *maximum))
+        }),
+    }
 }
 
 /// A bounded columnar typed view built from a text import without modifying source cells.
@@ -347,20 +597,89 @@ impl TypedTable {
 
     /// Keep rows whose selected cell equals a literal parsed using that column's type.
     pub(crate) fn filter_equal(&mut self, name: &str, literal: &str, job: &Job) -> Result<()> {
+        self.filter_compare(name, TypedComparison::Eq, literal, job)
+    }
+
+    /// Keep rows by a type-aware literal comparison. Nulls match only `eq` with a null literal.
+    pub(crate) fn filter_compare(
+        &mut self,
+        name: &str,
+        comparison: TypedComparison,
+        literal: &str,
+        job: &Job,
+    ) -> Result<()> {
         let index = self.column_index(name)?;
         let column = &self.columns[index];
         let expected = parse_filter_value(column, literal)?;
         let mut keep = Vec::with_capacity(self.rows);
         for value in &column.values {
             job.check()?;
-            keep.push(match &expected {
-                None => false,
-                Some(expected) => {
-                    compare_scalar(column, value, expected)? == std::cmp::Ordering::Equal
+            let value_is_null = matches!(value, Scalar::Null);
+            let literal_is_null = matches!(&expected, &Scalar::Null);
+            let retain = if value_is_null || literal_is_null {
+                matches!(comparison, TypedComparison::Eq) && value_is_null && literal_is_null
+            } else {
+                let ordering = compare_scalar(column, value, &expected)?;
+                match comparison {
+                    TypedComparison::Eq => ordering == std::cmp::Ordering::Equal,
+                    TypedComparison::Ne => ordering != std::cmp::Ordering::Equal,
+                    TypedComparison::Lt => ordering == std::cmp::Ordering::Less,
+                    TypedComparison::Lte => ordering != std::cmp::Ordering::Greater,
+                    TypedComparison::Gt => ordering == std::cmp::Ordering::Greater,
+                    TypedComparison::Gte => ordering != std::cmp::Ordering::Less,
                 }
-            });
+            };
+            keep.push(retain);
         }
         self.retain_rows(&keep, job)
+    }
+
+    pub(crate) fn derive_numeric_column(
+        &mut self,
+        name: String,
+        expression: &NumericExpr,
+        metadata: ColumnMetadata,
+        job: &Job,
+    ) -> Result<()> {
+        if name.trim().is_empty()
+            || name.chars().count() > MAX_METADATA_CHARS
+            || name.chars().any(char::is_control)
+            || self.columns.iter().any(|column| column.name == name)
+        {
+            return Err(Error::input(
+                "Derived column name must be printable, unique and at most 256 characters",
+            ));
+        }
+        if self.columns.len() >= MAX_COLS
+            || self.rows.saturating_mul(self.columns.len().saturating_add(1)) > MAX_CELLS
+        {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Derived column would exceed the typed table limits",
+            ));
+        }
+        validate_metadata(&metadata)?;
+        let mut nodes = 0;
+        validate_numeric_expression(expression, self, 1, &mut nodes)?;
+        let mut values = Vec::with_capacity(self.rows);
+        for row in 0..self.rows {
+            job.check()?;
+            let value = evaluate_numeric_expression(expression, self, row).map_err(|error| {
+                Error::new(
+                    error.kind,
+                    format!("Numeric expression failed on row {}: {}", row + 1, error.message),
+                )
+            })?;
+            values.push(value.map_or(Scalar::Null, Scalar::Float64));
+        }
+        self.columns.push(Column {
+            name,
+            kind: ColumnType::Float64,
+            values,
+            categories: Vec::new(),
+            metadata,
+        });
+        Ok(())
     }
 
     /// Stable, ascending sort using the typed value; nulls always sort after values.
@@ -1248,7 +1567,7 @@ mod tests {
         typed.sort_by("value", &Job::new()).unwrap();
         assert_eq!(
             typed.columns[0].values,
-            [
+            vec![
                 Scalar::Int64(2),
                 Scalar::Int64(2),
                 Scalar::Int64(10),
@@ -1264,7 +1583,57 @@ mod tests {
                     _ => panic!("expected string cell"),
                 })
                 .collect::<Vec<_>>(),
-            ["two", "second", "first", "missing"]
+            vec!["two", "second", "first", "missing"]
         );
+    }
+
+    #[test]
+    fn typed_numeric_expression_propagates_nulls_and_comparison_uses_numeric_order() {
+        let source = table(
+            vec!["base", "delta"],
+            vec![vec!["2", "1"], vec!["", "3"], vec!["10", "2"]],
+        );
+        let mut typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
+        let expression: NumericExpr = serde_json::from_str(
+            r#"{"op":"add","left":{"op":"column","name":"base"},"right":{"op":"column","name":"delta"}}"#,
+        )
+        .unwrap();
+        typed
+            .derive_numeric_column(
+                "total".into(),
+                &expression,
+                ColumnMetadata::default(),
+                &Job::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            typed.columns[2].values,
+            vec![Scalar::Float64(3.0), Scalar::Null, Scalar::Float64(12.0)]
+        );
+        typed
+            .filter_compare("total", TypedComparison::Gte, "10", &Job::new())
+            .unwrap();
+        assert_eq!(typed.rows, 1);
+        assert_eq!(typed.columns[2].values, vec![Scalar::Float64(12.0)]);
+    }
+
+    #[test]
+    fn numeric_expressions_reject_inexact_integer_conversion() {
+        let source = table(vec!["large"], vec![vec!["9007199254740993"]]);
+        let mut typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
+        let expression: NumericExpr = serde_json::from_str(
+            r#"{"op":"column","name":"large"}"#,
+        )
+        .unwrap();
+        let error = typed
+            .derive_numeric_column(
+                "converted".into(),
+                &expression,
+                ColumnMetadata::default(),
+                &Job::new(),
+            )
+            .unwrap_err();
+        assert!(error.message.contains("exact float64 expression range"));
+        assert_eq!(typed.columns.len(), 1);
     }
 }

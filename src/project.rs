@@ -1,6 +1,6 @@
 use super::{
     apply_step,
-    typed::{SchemaRequest, TypedTable},
+    typed::{ColumnMetadata, NumericExpr, SchemaRequest, TypedComparison, TypedTable},
     Table,
 };
 use localwright_core::{read_bounded, Error, Job, Result};
@@ -23,6 +23,19 @@ pub enum Step {
     Filter {
         column: String,
         value: String,
+    },
+    FilterCompare {
+        column: String,
+        comparison: TypedComparison,
+        value: String,
+    },
+    DeriveNumericColumn {
+        name: String,
+        expression: NumericExpr,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        unit: Option<String>,
     },
     SelectColumns {
         columns: Vec<String>,
@@ -261,6 +274,22 @@ impl Project {
             job.check()?;
             let result = match step {
                 Step::Filter { column, value } => table.filter_equal(&column, &value, job),
+                Step::FilterCompare {
+                    column,
+                    comparison,
+                    value,
+                } => table.filter_compare(&column, comparison, &value, job),
+                Step::DeriveNumericColumn {
+                    name,
+                    expression,
+                    label,
+                    unit,
+                } => table.derive_numeric_column(
+                    name,
+                    &expression,
+                    ColumnMetadata { label, unit },
+                    job,
+                ),
                 Step::SelectColumns { columns } => table.select_columns(&columns, job),
                 Step::Sort { column } => table.sort_by(&column, job),
                 Step::DropMissing { column } => table.drop_missing(&column, job),
@@ -269,7 +298,7 @@ impl Project {
                 Step::TailRows { rows } => table.tail_rows(rows, job),
                 Step::ReverseRows {} => table.reverse_rows(job),
                 _ => Err(Error::input(
-                    "This operation is not supported in a typed pipeline yet; use one of filter, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
+                    "This operation is not supported in a typed pipeline yet; use filter, filter-compare, derive-numeric-column, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
                 )),
             };
             result.map_err(|error| {
