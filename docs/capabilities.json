@@ -164,6 +164,76 @@
       "status": "implemented-unverified",
       "targets": [],
       "fixture_status": "not run"
+    },
+    {
+      "operation": "quantiles",
+      "description": "R7 quartiles, median and interquartile range",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linear interpolation reference fixture passed"
+    },
+    {
+      "operation": "standard-error",
+      "description": "Sample standard deviation and standard error of the mean",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux operation report fixture passed"
+    },
+    {
+      "operation": "mean-ci",
+      "description": "Two-sided 95 percent Student-t confidence interval for a numeric mean",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Student-t critical values and interval matched reference values"
+    },
+    {
+      "operation": "bootstrap-mean-ci",
+      "description": "Deterministic 2,000-resample percentile bootstrap interval for a mean",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Repeated run determinism and bounded interval fixture passed"
+    },
+    {
+      "operation": "bootstrap-median-ci",
+      "description": "Deterministic 2,000-resample percentile bootstrap interval for a median",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Repeated run determinism and bounded interval fixture passed"
+    },
+    {
+      "operation": "welch-t-test",
+      "description": "Unequal-variance two-sample Student-t test and difference interval",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Two-sided p value, degrees of freedom and statistic matched reference fixture"
+    },
+    {
+      "operation": "paired-t-test",
+      "description": "Paired Student-t test on complete numeric differences",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux complete-pair and difference-vector fixture passed"
+    },
+    {
+      "operation": "one-way-anova",
+      "description": "Independent-groups one-way fixed-effects ANOVA",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "F statistic, degrees of freedom and p value matched reference fixture"
+    },
+    {
+      "operation": "spearman",
+      "description": "Spearman rank correlation with average ranks and approximate significance",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Tied-rank and significance approximation fixture passed"
+    },
+    {
+      "operation": "correlation-interval",
+      "description": "Two-sided 95 percent Fisher-z interval for Pearson correlation",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Interval ordering, containment and boundary rejection fixtures passed"
     }
   ]
 }

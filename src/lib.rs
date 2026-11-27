@@ -2,6 +2,7 @@
 mod join;
 mod project;
 mod sql;
+mod statistics;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx};
@@ -31,6 +32,16 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
+ Operation{id:"quantiles",label:"Quantiles and IQR",hint:"Parameter: numeric column. Reports R7 quartiles, median and interquartile range as JSON."},
+ Operation{id:"standard-error",label:"Standard error",hint:"Parameter: numeric column. Reports sample SD and standard error of the mean."},
+ Operation{id:"mean-ci",label:"Mean confidence interval",hint:"Parameter: numeric column. Reports a two-sided 95% Student-t interval for the mean."},
+ Operation{id:"bootstrap-mean-ci",label:"Bootstrap mean interval",hint:"Parameter: numeric column. Deterministic 95% percentile bootstrap; at least 2 and at most 5,000 values."},
+ Operation{id:"bootstrap-median-ci",label:"Bootstrap median interval",hint:"Parameter: numeric column. Deterministic 95% percentile bootstrap; at least 2 and at most 5,000 values."},
+ Operation{id:"welch-t-test",label:"Welch two-sample test",hint:"Enter group-column,value-column. Requires exactly two nonblank groups with at least two finite values each."},
+ Operation{id:"paired-t-test",label:"Paired t test",hint:"Enter first-column,second-column. Blank pairs excluded; tests mean paired difference with a two-sided Student-t interval."},
+ Operation{id:"one-way-anova",label:"One-way ANOVA",hint:"Enter group-column,value-column. Blank group/value rows excluded; at least two groups and positive within-group degrees of freedom required."},
+ Operation{id:"spearman",label:"Spearman rank correlation",hint:"Enter x-column,y-column. Complete numeric pairs only; average ranks for ties and approximate p value."},
+ Operation{id:"correlation-interval",label:"Pearson correlation interval",hint:"Enter x-column,y-column. Reports a two-sided 95% Fisher-z interval for n > 3 and |r| < 1."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
  Operation{id:"line-chart",label:"Line chart SVG",hint:"Enter x-column,y-column. Complete numeric rows connect in table order. Choose a new .svg file."},
@@ -557,6 +568,131 @@ fn column_pair(table: &Table, parameter: &str) -> Result<(usize, usize)> {
     Ok((column(table, x)?, column(table, y)?))
 }
 
+fn numeric_value(value: &str) -> Result<Option<f64>> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    let number: f64 = value.trim().parse().map_err(err)?;
+    if !number.is_finite() {
+        return Err(Error::input("Nonfinite numeric value"));
+    }
+    Ok(Some(number))
+}
+
+fn numeric_values(table: &Table, index: usize, job: &Job) -> Result<Vec<f64>> {
+    let mut values = Vec::new();
+    for row in &table.rows {
+        job.check()?;
+        if let Some(value) = numeric_value(&row[index])? {
+            values.push(value);
+        }
+    }
+    Ok(values)
+}
+
+fn complete_numeric_pairs(
+    table: &Table,
+    first: usize,
+    second: usize,
+    job: &Job,
+) -> Result<(Vec<f64>, Vec<f64>)> {
+    let mut a = Vec::new();
+    let mut b = Vec::new();
+    for row in &table.rows {
+        job.check()?;
+        let (Some(left), Some(right)) = (numeric_value(&row[first])?, numeric_value(&row[second])?)
+        else {
+            continue;
+        };
+        a.push(left);
+        b.push(right);
+    }
+    Ok((a, b))
+}
+
+fn grouped_numeric_values(
+    table: &Table,
+    group_index: usize,
+    value_index: usize,
+    job: &Job,
+) -> Result<Vec<statistics::GroupSample>> {
+    let mut groups = std::collections::BTreeMap::<String, Vec<f64>>::new();
+    for row in &table.rows {
+        job.check()?;
+        let label = &row[group_index];
+        if label.trim().is_empty() {
+            continue;
+        }
+        if let Some(value) = numeric_value(&row[value_index])? {
+            groups.entry(label.clone()).or_default().push(value);
+        }
+    }
+    Ok(groups
+        .into_iter()
+        .map(|(label, values)| statistics::GroupSample { label, values })
+        .collect())
+}
+
+fn statistical_report(
+    operation: &str,
+    table: &Table,
+    parameter: &str,
+    job: &Job,
+) -> Result<serde_json::Value> {
+    match operation {
+        "quantiles"
+        | "standard-error"
+        | "mean-ci"
+        | "bootstrap-mean-ci"
+        | "bootstrap-median-ci" => {
+            let values = numeric_values(table, column(table, parameter)?, job)?;
+            match operation {
+                "quantiles" => statistics::quantiles(&values),
+                "standard-error" => statistics::standard_error(&values),
+                "mean-ci" => statistics::mean_confidence_interval(&values),
+                "bootstrap-mean-ci" => statistics::bootstrap_mean_interval(&values, job),
+                _ => statistics::bootstrap_median_interval(&values, job),
+            }
+        }
+        "welch-t-test" | "one-way-anova" => {
+            let (group_name, value_name) = parameter
+                .split_once(',')
+                .ok_or_else(|| Error::input("Expected group-column,value-column"))?;
+            let groups = grouped_numeric_values(
+                table,
+                column(table, group_name)?,
+                column(table, value_name)?,
+                job,
+            )?;
+            if operation == "welch-t-test" {
+                if groups.len() != 2 {
+                    return Err(Error::input(
+                        "Welch test requires exactly two nonblank groups",
+                    ));
+                }
+                statistics::welch_t_test(&groups[0].values, &groups[1].values)
+            } else {
+                statistics::one_way_anova(&groups)
+            }
+        }
+        "paired-t-test" | "spearman" => {
+            let (first, second) = column_pair(table, parameter)?;
+            let (a, b) = complete_numeric_pairs(table, first, second, job)?;
+            if operation == "paired-t-test" {
+                statistics::paired_t_test(&a, &b)
+            } else {
+                statistics::spearman(&a, &b)
+            }
+        }
+        "correlation-interval" => {
+            let (first, second) = column_pair(table, parameter)?;
+            let moments = pair_moments(table, first, second, job)?;
+            statistics::pearson_interval(moments.pearson_r()?, moments.n)
+        }
+        _ => Err(Error::input("Unknown statistical route")),
+    }
+}
+
 struct PairMoments {
     n: usize,
     mean_x: f64,
@@ -734,6 +870,32 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     let preview = match r.operation.as_str() {
         "counts" => value_counts(&t, column(&t, &r.parameter)?, &j)?,
         "summary" => summary(&t, column(&t, &r.parameter)?, &j)?,
+        "quantiles"
+        | "standard-error"
+        | "mean-ci"
+        | "bootstrap-mean-ci"
+        | "bootstrap-median-ci"
+        | "welch-t-test"
+        | "paired-t-test"
+        | "one-way-anova"
+        | "spearman"
+        | "correlation-interval" => {
+            let report = statistical_report(&r.operation, &t, &r.parameter, &j)?;
+            let text = serde_json::to_string_pretty(&report)?;
+            if !r.output.as_os_str().is_empty() {
+                if r.output
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    != Some("json")
+                {
+                    return Err(Error::input("Statistical reports require a .json output"));
+                }
+                j.check()?;
+                write_bytes(&r.output, text.as_bytes())?;
+                written = Some(r.output);
+            }
+            text
+        }
         "correlation" => {
             let (x, y) = column_pair(&t, &r.parameter)?;
             correlation(&t, x, y, &j)?
@@ -948,6 +1110,72 @@ mod tests {
         assert!((sample_sd - 2.0f64.sqrt()).abs() < 1e-12);
         assert_eq!(table.rows[1], ["B", "1", "0", "2", "", "2", "2"]);
         assert_eq!(table.rows[2], ["C", "0", "1", "", "", "", ""]);
+    }
+
+    #[test]
+    fn ten_statistical_routes_return_reports_and_preserve_no_overwrite() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("measurements.csv");
+        std::fs::write(
+            &input,
+            "group,x,y\nA,1,10\nA,2,9\nA,3,8\nB,5,5\nB,6,6\nB,7,3\n,8,4\n",
+        )
+        .unwrap();
+        let operations = [
+            ("quantiles", "x"),
+            ("standard-error", "x"),
+            ("mean-ci", "x"),
+            ("bootstrap-mean-ci", "x"),
+            ("bootstrap-median-ci", "x"),
+            ("welch-t-test", "group,x"),
+            ("paired-t-test", "x,y"),
+            ("one-way-anova", "group,x"),
+            ("spearman", "x,y"),
+            ("correlation-interval", "x,y"),
+        ];
+        for (operation, parameter) in operations {
+            let outcome = handle(
+                Request {
+                    operation: operation.into(),
+                    input: input.clone(),
+                    parameter: parameter.into(),
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+            .unwrap_or_else(|error| panic!("{operation}: {error}"));
+            let report: serde_json::Value = serde_json::from_str(&outcome.preview)
+                .unwrap_or_else(|error| panic!("{operation}: {error}"));
+            assert!(report.is_object(), "{operation} report must be JSON object");
+        }
+
+        let output = directory.path().join("confidence.json");
+        let report = handle(
+            Request {
+                operation: "mean-ci".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: "x".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(report.written, Some(output.clone()));
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+        assert_eq!(saved["confidence_level"], 0.95);
+        assert!(handle(
+            Request {
+                operation: "mean-ci".into(),
+                input,
+                output,
+                parameter: "x".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .is_err());
     }
 
     #[test]

@@ -10,13 +10,14 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `deduplicate`: Keep the first occurrence of each full row. Leave the parameter blank. Both operations can preview rows or export to a new CSV, TSV or Parquet file.
 - `mask-column`: Enter the exact column name to replace its nonempty values with `[MASKED]`. Preview the result or export a new CSV, TSV or Parquet file. Review other columns and blank patterns before sharing masked data.
 - `summary`: Numeric column n, missing, mean, sample SD, min/max.
+- Statistical reports can optionally be saved to a new `.json` output. They do not alter the input table.
 - `export`: CSV formula guard; Parquet UTF-8 columns.
 - `linear-regression`: Enter exact predictor and response column names separated by a comma. The preview reports the least-squares intercept, slope, R² and complete and excluded pair counts. It uses finite numeric complete pairs. A constant response yields an undefined R². Inferential statistics are outside this route.
 - `correlation`: Enter two exact column names separated by a comma. The preview reports Pearson's r and the complete and excluded pair counts. Blank pairs are excluded. Both columns must vary, and every complete pair must be finite numeric data.
 - `line-chart`: Enter two numeric column names separated by a comma. Write a new monochrome SVG. Complete pairs are connected in table order, including across missing rows.
 - `scatter`: Monochrome scatter SVG, 800 x 600.
 
-Limitations: In-memory text table only; no inferred types, large-data virtualization, formulas, advanced statistics, project editing, undo, batch runs, other formats, authoritative palettes or full scientific export. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.
+Limitations: In-memory text table only; no inferred types, large-data virtualization, formulas, project editing, undo, batch runs, other formats, authoritative palettes or full scientific export. Inferential routes are limited to the methods documented below; assumptions are not diagnosed, p-values are unadjusted, and no multiple-testing correction or causal inference is provided. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.
 
 No output overwrite is allowed. No accounts, ads, telemetry or runtime downloads are intended. Do not use this unverified snapshot with valuable or hostile input. Citation and donations are voluntary.
 
@@ -55,6 +56,20 @@ Use `group-summary` with `group-column,value-column`. One row per exact group ap
 Choose `select-sql` and enter one SQLite SELECT. The imported table is named `input`. For example, `SELECT category, SUM(CAST(amount AS REAL)) AS total FROM input GROUP BY category ORDER BY category`. Wrap column names with spaces in double quotes. The table starts with text columns, so use explicit casts and review invalid numeric text before casting. NULL results are exported as empty text and BLOB results are rejected. Result names must be unique.
 
 The bundled engine uses an in-memory database and limits statement size, output cells and execution work. It permits SELECT and a limited list of text and numeric functions. The route refuses database attachment, extensions, PRAGMAs, writes and multiple statements. Use a new CSV, TSV or Parquet output or leave it blank to preview.
+
+## Inferential statistics and intervals
+
+- `quantiles` reports Q1, median, Q3 and IQR using Hyndman-Fan type 7 linear interpolation.
+- `standard-error` reports sample SD divided by the square root of n. At least two finite observations are required.
+- `mean-ci` reports a two-sided 95% Student-t interval. It assumes independent observations and uses the sample variance.
+- `bootstrap-mean-ci` and `bootstrap-median-ci` use 2,000 deterministic percentile-bootstrap resamples with replacement. They require 2 to 5,000 finite observations. The intervals are not bias-corrected; resampling is reproducible from the values.
+- `welch-t-test` takes `group-column,value-column`. It requires exactly two nonblank groups with at least two finite values each; blank group labels and blank numeric values are omitted. Group order is text order, and the reported difference is first group minus second. The test uses the Welch-Satterthwaite approximation and returns a two-sided p-value and 95% difference interval.
+- `paired-t-test` takes `first-column,second-column`; incomplete pairs are omitted. It tests the mean first-minus-second difference with a two-sided Student-t test and 95% interval.
+- `one-way-anova` takes `group-column,value-column`. It reports an ordinary fixed-effects one-way ANOVA for independent groups. Blank group labels and numeric values are omitted. It does not test normality or equal variance assumptions.
+- `spearman` takes `x-column,y-column`, computes average ranks for ties, and reports rho. Its two-sided p-value uses a t approximation, which can be inaccurate for small samples.
+- `correlation-interval` returns a 95% Fisher-z interval for Pearson's r when n > 3 and |r| < 1. It assumes independent bivariate-normal pairs.
+
+All numeric routes reject nonfinite or malformed observed values, state their method in the JSON report and do not imply causation. P-values are unadjusted for multiple testing. Review assumptions and the input table before drawing conclusions. Reports appear in the preview and can be saved to a new JSON file without overwriting an existing one.
 
 ## Additional operations
 
