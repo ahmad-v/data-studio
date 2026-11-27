@@ -1039,7 +1039,22 @@ fn try_typed_basic_operation(
 ) -> Result<Option<Outcome>> {
     if !matches!(
         operation,
-        "filter" | "sort" | "select-columns" | "rename-column" | "inner-join"
+        "filter"
+            | "filter-not-equal"
+            | "filter-number-greater"
+            | "filter-number-greater-equal"
+            | "filter-number-less"
+            | "filter-number-less-equal"
+            | "filter-number-between"
+            | "sort"
+            | "select-columns"
+            | "rename-column"
+            | "drop-missing"
+            | "drop-rows-any-missing"
+            | "head-rows"
+            | "tail-rows"
+            | "reverse-rows"
+            | "inner-join"
     ) {
         return Ok(None);
     }
@@ -1091,9 +1106,55 @@ fn try_typed_basic_operation(
     } else {
         match step.expect("non-join operations have a parsed typed step") {
             Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
+            Step::FilterNotEqual { column, value } => table.filter_compare(
+                &column,
+                typed::TypedComparison::Ne,
+                &value,
+                job,
+            )?,
+            Step::FilterNumberGreater { column, value } => table.filter_number(
+                &column,
+                typed::TypedComparison::Gt,
+                value,
+                job,
+            )?,
+            Step::FilterNumberGreaterEqual { column, value } => table.filter_number(
+                &column,
+                typed::TypedComparison::Gte,
+                value,
+                job,
+            )?,
+            Step::FilterNumberLess { column, value } => table.filter_number(
+                &column,
+                typed::TypedComparison::Lt,
+                value,
+                job,
+            )?,
+            Step::FilterNumberLessEqual { column, value } => table.filter_number(
+                &column,
+                typed::TypedComparison::Lte,
+                value,
+                job,
+            )?,
+            Step::FilterNumberBetween {
+                column,
+                lower,
+                upper,
+            } => {
+                if lower > upper {
+                    return Err(Error::input("Lower bound must not exceed upper bound"));
+                }
+                table.filter_number(&column, typed::TypedComparison::Gte, lower, job)?;
+                table.filter_number(&column, typed::TypedComparison::Lte, upper, job)?;
+            }
             Step::Sort { column } => table.sort_by(&column, job)?,
             Step::SelectColumns { columns } => table.select_columns(&columns, job)?,
             Step::RenameColumn { column, name } => table.rename_column(&column, name)?,
+            Step::DropMissing { column } => table.drop_missing(&column, job)?,
+            Step::DropRowsAnyMissing {} => table.drop_rows_any_missing(job)?,
+            Step::HeadRows { rows } => table.head_rows(rows, job)?,
+            Step::TailRows { rows } => table.tail_rows(rows, job)?,
+            Step::ReverseRows {} => table.reverse_rows(job)?,
             _ => return Ok(None),
         }
     }

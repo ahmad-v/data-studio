@@ -4,7 +4,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 
 | Operation | Scope | Status |
 |---|---|---|
-| drop-missing | Drop rows missing a selected value | Linux fixture-tested |
+| drop-missing | Drop typed nulls from CSV/TSV and supported scalar Parquet routes | New regression fixture; hosted verification pending |
 | fill-missing | Fill blanks in a selected column | Linux fixture-tested |
 | rename-column | Typed CSV/TSV and supported flat Parquet rename; typed preview, CSV/TSV and Parquet output | Regression route added; new hosted verification pending |
 | select-columns | Typed CSV/TSV and supported flat Parquet selection; typed preview, CSV/TSV and Parquet output | Regression route added; new hosted verification pending |
@@ -12,8 +12,10 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | preview | CSV, TSV, named or first XLSX sheet, or supported flat scalar Parquet cast to text | Linux fixture-tested |
 | inspect-schema | Infer or explicitly validate a columnar schema; report types, nulls, categorical dictionary counts, labels and units without modifying input; CSV/TSV parses directly to typed columns | Linux unit and route fixtures passed; five-target hosted verification pending |
 | export-typed-parquet | Write a validated or inferred typed Arrow schema, including nulls, temporal types, category dictionaries and label/unit metadata | Linux round-trip/rejection fixtures passed; hosted native matrix pending |
-| filter | Type-aware equality for CSV/TSV and supported flat Parquet; typed preview and supported CSV/TSV/Parquet output | Regression route added; new hosted verification pending |
+| filter | Type-aware equality and inequality for CSV/TSV and supported flat Parquet; typed preview and supported CSV/TSV/Parquet output | Regression route added; hosted verification pending |
+| filter-number-* | Typed finite numeric comparisons and inclusive range; nulls excluded and unsafe integer precision rejected | Regression route added; hosted verification pending |
 | sort | Stable type-aware ascending sort, nulls last, for CSV/TSV and supported flat Parquet; typed preview and supported output | Regression route added; new hosted verification pending |
+| head-rows / tail-rows / reverse-rows | Typed row selection and ordering for supported CSV/TSV and scalar Parquet | Regression route added; hosted verification pending |
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
 | mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
 | inner-join | Bounded exact-text fallback plus typed key matching for CSV/TSV and supported scalar Parquet input, with typed Parquet output | Regression route added; new hosted verification pending |

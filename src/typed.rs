@@ -885,6 +885,59 @@ impl TypedTable {
         self.filter_compare(name, TypedComparison::Eq, literal, job)
     }
 
+    /// Filter a numeric column by a finite real threshold. Integer columns are
+    /// rejected outside the exact f64 integer range rather than silently
+    /// rounding values during comparison.
+    pub(crate) fn filter_number(
+        &mut self,
+        name: &str,
+        comparison: TypedComparison,
+        threshold: f64,
+        job: &Job,
+    ) -> Result<()> {
+        if !threshold.is_finite() {
+            return Err(Error::input("Numeric filter threshold must be finite"));
+        }
+        let index = self.column_index(name)?;
+        let column = &self.columns[index];
+        if !matches!(column.kind, ColumnType::Int64 | ColumnType::UInt64 | ColumnType::Float64) {
+            return Err(Error::input(format!(
+                "Numeric filter column {name:?} must have an integer or floating-point type"
+            )));
+        }
+        let mut keep = Vec::with_capacity(self.rows);
+        for value in &column.values {
+            job.check()?;
+            let ordering = match value {
+                Scalar::Null => None,
+                Scalar::Float64(value) => value.partial_cmp(&threshold),
+                Scalar::Int64(value)
+                    if value.unsigned_abs() <= MAX_EXACT_FLOAT64_INTEGER =>
+                {
+                    (*value as f64).partial_cmp(&threshold)
+                }
+                Scalar::UInt64(value) if *value <= MAX_EXACT_FLOAT64_INTEGER => {
+                    (*value as f64).partial_cmp(&threshold)
+                }
+                Scalar::Int64(_) | Scalar::UInt64(_) => {
+                    return Err(Error::input(format!(
+                        "Numeric comparison for {name:?} exceeds the exact floating-point range"
+                    )))
+                }
+                _ => return Err(Error::input("Typed numeric column contains an invalid value")),
+            };
+            keep.push(ordering.is_some_and(|ordering| match comparison {
+                TypedComparison::Eq => ordering == std::cmp::Ordering::Equal,
+                TypedComparison::Ne => ordering != std::cmp::Ordering::Equal,
+                TypedComparison::Lt => ordering == std::cmp::Ordering::Less,
+                TypedComparison::Lte => ordering != std::cmp::Ordering::Greater,
+                TypedComparison::Gt => ordering == std::cmp::Ordering::Greater,
+                TypedComparison::Gte => ordering != std::cmp::Ordering::Less,
+            }));
+        }
+        self.retain_rows(&keep, job)
+    }
+
     /// Keep rows by a type-aware literal comparison. Nulls match only `eq` with a null literal.
     pub(crate) fn filter_compare(
         &mut self,

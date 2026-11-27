@@ -11,7 +11,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux text route fixture passed; added typed Parquet output and preview coverage"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route regression added; missing values use typed nulls; hosted verification pending"
     },
     {
       "operation": "fill-missing",
@@ -426,7 +426,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route regression added; hosted verification pending"
     },
     {
       "operation": "tail-rows",
@@ -435,7 +435,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route regression added; hosted verification pending"
     },
     {
       "operation": "drop-duplicates-by-columns",
@@ -498,42 +498,42 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route regression added; values compare by inferred type; hosted verification pending"
     },
     {
       "operation": "filter-number-greater",
       "description": "Keep rows whose finite numeric cell is strictly greater than a threshold; blanks are excluded",
       "status": "implemented-unverified",
       "targets": ["x86_64-unknown-linux-gnu"],
-      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route added; nulls excluded and unsafe integer precision rejected; hosted verification pending"
     },
     {
       "operation": "filter-number-greater-equal",
       "description": "Keep rows whose finite numeric cell is greater than or equal to a threshold; blanks are excluded",
       "status": "implemented-unverified",
       "targets": ["x86_64-unknown-linux-gnu"],
-      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route added; nulls excluded and unsafe integer precision rejected; hosted verification pending"
     },
     {
       "operation": "filter-number-less",
       "description": "Keep rows whose finite numeric cell is strictly less than a threshold; blanks are excluded",
       "status": "implemented-unverified",
       "targets": ["x86_64-unknown-linux-gnu"],
-      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route added; nulls excluded and unsafe integer precision rejected; hosted verification pending"
     },
     {
       "operation": "filter-number-less-equal",
       "description": "Keep rows whose finite numeric cell is less than or equal to a threshold; blanks are excluded",
       "status": "implemented-unverified",
       "targets": ["x86_64-unknown-linux-gnu"],
-      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route added; nulls excluded and unsafe integer precision rejected; hosted verification pending"
     },
     {
       "operation": "filter-number-between",
       "description": "Keep rows whose finite numeric cell falls within inclusive ordered bounds; blanks are excluded",
       "status": "implemented-unverified",
       "targets": ["x86_64-unknown-linux-gnu"],
-      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route added; inclusive bounds, null exclusion and unsafe integer precision rejection; hosted verification pending"
     },
     {
       "operation": "add-numeric-columns",
@@ -648,7 +648,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route regression added; hosted verification pending"
     },
     {
       "operation": "fill-forward",
@@ -684,7 +684,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed CSV/TSV and supported scalar Parquet route regression added; hosted verification pending"
     }
   ]
 }
