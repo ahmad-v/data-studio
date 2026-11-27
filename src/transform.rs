@@ -103,6 +103,46 @@ fn convert(table: &mut Table, column: &str, kind: &str, job: &Job) -> Result<()>
     Ok(())
 }
 
+fn fill_direction(table: &mut Table, column_name: &str, forward: bool, job: &Job) -> Result<()> {
+    let column = crate::column(table, column_name)?;
+    let mut size = text_bytes(table)?;
+    let mut carry: Option<String> = None;
+    let mut replacements = vec![None; table.rows.len()];
+    let indexes: Box<dyn Iterator<Item = usize>> = if forward {
+        Box::new(0..table.rows.len())
+    } else {
+        Box::new((0..table.rows.len()).rev())
+    };
+    for index in indexes {
+        job.check()?;
+        let value = &table.rows[index][column];
+        if value.trim().is_empty() {
+            if let Some(previous) = &carry {
+                size = size
+                    .checked_sub(value.len())
+                    .and_then(|bytes| bytes.checked_add(previous.len()))
+                    .filter(|bytes| *bytes <= MAX_TEXT_BYTES)
+                    .ok_or_else(|| {
+                        Error::new(
+                            localwright_core::ErrorKind::Limit,
+                            "Filled table exceeds 32 MiB of cell text",
+                        )
+                    })?;
+                replacements[index] = Some(previous.clone());
+            }
+        } else {
+            carry = Some(value.clone());
+        }
+    }
+    for (row, replacement) in table.rows.iter_mut().zip(replacements) {
+        job.check()?;
+        if let Some(value) = replacement {
+            row[column] = value;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn apply(mut table: Table, step: Step, job: &Job) -> Result<Table> {
     match step {
         Step::RecodeValues { column, mapping } => {
@@ -556,6 +596,159 @@ pub(crate) fn apply(mut table: Table, step: Step, job: &Job) -> Result<Table> {
                     .filter_map(|(i, value)| (!remove.contains(&i)).then_some(value))
                     .collect();
             }
+        }
+        Step::FilterNotEqual { column, value } => {
+            let index = crate::column(&table, &column)?;
+            let mut rows = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if row[index] != value {
+                    rows.push(row);
+                }
+            }
+            table.rows = rows;
+        }
+        Step::FilterContainsInsensitive { column, value } => {
+            let index = crate::column(&table, &column)?;
+            if value.is_empty() {
+                return Err(Error::input("Search text must not be empty"));
+            }
+            let needle = value.to_lowercase();
+            let mut rows = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if row[index].to_lowercase().contains(&needle) {
+                    rows.push(row);
+                }
+            }
+            table.rows = rows;
+        }
+        Step::FilterStartsWith { column, value } => {
+            let index = crate::column(&table, &column)?;
+            if value.is_empty() {
+                return Err(Error::input("Search text must not be empty"));
+            }
+            let mut rows = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if row[index].starts_with(&value) {
+                    rows.push(row);
+                }
+            }
+            table.rows = rows;
+        }
+        Step::FilterEndsWith { column, value } => {
+            let index = crate::column(&table, &column)?;
+            if value.is_empty() {
+                return Err(Error::input("Search text must not be empty"));
+            }
+            let mut rows = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if row[index].ends_with(&value) {
+                    rows.push(row);
+                }
+            }
+            table.rows = rows;
+        }
+        Step::ReplaceLiteral {
+            column,
+            find,
+            replace,
+        } => {
+            if find.is_empty() {
+                return Err(Error::input("Find text must not be empty"));
+            }
+            let index = crate::column(&table, &column)?;
+            let mut size = text_bytes(&table)?;
+            for row in &mut table.rows {
+                job.check()?;
+                let old = &row[index];
+                let count = old.matches(&find).count();
+                let removed = find.len().checked_mul(count).ok_or_else(|| {
+                    Error::new(
+                        localwright_core::ErrorKind::Limit,
+                        "Replacement size overflow",
+                    )
+                })?;
+                let added = replace.len().checked_mul(count).ok_or_else(|| {
+                    Error::new(
+                        localwright_core::ErrorKind::Limit,
+                        "Replacement size overflow",
+                    )
+                })?;
+                let new_len = old
+                    .len()
+                    .checked_sub(removed)
+                    .and_then(|n| n.checked_add(added))
+                    .ok_or_else(|| Error::input("Replacement size overflow"))?;
+                size = size
+                    .checked_sub(old.len())
+                    .and_then(|n| n.checked_add(new_len))
+                    .filter(|n| *n <= MAX_TEXT_BYTES)
+                    .ok_or_else(|| {
+                        Error::new(
+                            localwright_core::ErrorKind::Limit,
+                            "Replacement exceeds 32 MiB of cell text",
+                        )
+                    })?;
+                row[index] = old.replace(&find, &replace);
+            }
+        }
+        Step::DropRowsAnyMissing {} => {
+            let mut rows = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if row.iter().all(|cell| !cell.trim().is_empty()) {
+                    rows.push(row);
+                }
+            }
+            table.rows = rows;
+        }
+        Step::FillForward { column } => fill_direction(&mut table, &column, true, job)?,
+        Step::FillBackward { column } => fill_direction(&mut table, &column, false, job)?,
+        Step::DropEmptyColumns {} => {
+            let mut nonempty = vec![false; table.headers.len()];
+            for row in &table.rows {
+                job.check()?;
+                for (column, cell) in row.iter().enumerate() {
+                    if !cell.trim().is_empty() {
+                        nonempty[column] = true;
+                    }
+                }
+                if nonempty.iter().all(|value| *value) {
+                    break;
+                }
+            }
+            let keep = nonempty
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| value.then_some(index))
+                .collect::<Vec<_>>();
+            if keep.is_empty() {
+                return Err(Error::input(
+                    "Cannot drop every column; no nonempty column remains",
+                ));
+            }
+            let keep_set = keep.iter().copied().collect::<HashSet<_>>();
+            table.headers = table
+                .headers
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, name)| keep_set.contains(&i).then_some(name))
+                .collect();
+            for row in &mut table.rows {
+                job.check()?;
+                *row = std::mem::take(row)
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(i, value)| keep_set.contains(&i).then_some(value))
+                    .collect();
+            }
+        }
+        Step::ReverseRows {} => {
+            job.check()?;
+            table.rows.reverse();
         }
         _ => {
             return Err(Error::input(

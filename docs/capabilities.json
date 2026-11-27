@@ -472,6 +472,96 @@
         "x86_64-unknown-linux-gnu"
       ],
       "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "filter-not-equal",
+      "description": "Keep rows whose selected exact-text cell differs from a literal value",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "filter-contains-insensitive",
+      "description": "Case-insensitive substring filter using Unicode lowercase mapping",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "filter-starts-with",
+      "description": "Case-sensitive literal prefix filter",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "filter-ends-with",
+      "description": "Case-sensitive literal suffix filter",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "replace-literal",
+      "description": "Bounded non-overlapping literal replacement in one text column",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "drop-rows-any-missing",
+      "description": "Remove rows containing a blank or whitespace-only cell",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "fill-forward",
+      "description": "Fill blanks from the preceding nonblank value in a column",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "fill-backward",
+      "description": "Fill blanks from the following nonblank value in a column",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "drop-empty-columns",
+      "description": "Remove all-blank columns while retaining at least one nonempty column",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "reverse-rows",
+      "description": "Reverse table row order",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
     }
   ]
 }

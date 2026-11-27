@@ -52,6 +52,16 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | normalize-text | Trim, Unicode case change, or collapse whitespace | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | rename-columns | Atomically rename multiple columns | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | drop-columns | Drop selected columns while retaining at least one | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| filter-not-equal | Exact-text inequality filter | Linux route and project fixtures passed; hosted matrix pending |
+| filter-contains-insensitive | Unicode lowercase substring filter | Linux route and project fixtures passed; hosted matrix pending |
+| filter-starts-with | Case-sensitive literal prefix filter | Linux route and project fixtures passed; hosted matrix pending |
+| filter-ends-with | Case-sensitive literal suffix filter | Linux route and project fixtures passed; hosted matrix pending |
+| replace-literal | Bounded non-overlapping literal text replacement | Linux route and project fixtures passed; hosted matrix pending |
+| drop-rows-any-missing | Remove rows with any blank or whitespace-only cell | Linux route and project fixtures passed; hosted matrix pending |
+| fill-forward | Fill blanks from nearest preceding value | Linux route and project fixtures passed; hosted matrix pending |
+| fill-backward | Fill blanks from nearest following value | Linux route and project fixtures passed; hosted matrix pending |
+| drop-empty-columns | Remove all-blank columns, retaining at least one | Linux route and project fixtures passed; hosted matrix pending |
+| reverse-rows | Reverse table row order | Linux route and project fixtures passed; hosted matrix pending |
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
 | correlation | Pearson coefficient on complete numeric pairs | Linux fixture-tested |

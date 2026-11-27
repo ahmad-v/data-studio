@@ -351,6 +351,151 @@ fn all_ten_new_transformations_replay_in_a_project() {
 }
 
 #[test]
+fn additional_filters_use_explicit_case_and_literal_rules() {
+    let source = "name,code\nÉcole,AB-1\nAda,AB-2\nGrace,xy-1\n";
+    assert_eq!(
+        operation(
+            source,
+            "filter-not-equal",
+            json!({"column":"code","value":"AB-1"})
+        )["preview"],
+        json!([["Ada", "AB-2"], ["Grace", "xy-1"]])
+    );
+    assert_eq!(
+        operation(
+            source,
+            "filter-contains-insensitive",
+            json!({"column":"name","value":"ÉCOLE"})
+        )["preview"],
+        json!([["École", "AB-1"]])
+    );
+    assert_eq!(
+        operation(
+            source,
+            "filter-starts-with",
+            json!({"column":"code","value":"AB"})
+        )["preview"],
+        json!([["École", "AB-1"], ["Ada", "AB-2"]])
+    );
+    assert_eq!(
+        operation(
+            source,
+            "filter-ends-with",
+            json!({"column":"code","value":"-1"})
+        )["preview"],
+        json!([["École", "AB-1"], ["Grace", "xy-1"]])
+    );
+    assert!(fails(
+        source,
+        "filter-contains-insensitive",
+        json!({"column":"name","value":""})
+    ));
+}
+
+#[test]
+fn literal_replacement_is_nonoverlapping_and_preserves_unmatched_text() {
+    let source = "text\na--a\nnone\n";
+    let changed = operation(
+        source,
+        "replace-literal",
+        json!({"column":"text","find":"a","replace":"xy"}),
+    );
+    assert_eq!(changed["preview"], json!([["xy--xy"], ["none"]]));
+    assert!(fails(
+        source,
+        "replace-literal",
+        json!({"column":"text","find":"","replace":"x"})
+    ));
+}
+
+#[test]
+fn drop_rows_any_missing_drops_blank_and_whitespace_cells() {
+    let result = operation("a,b\n1,ok\n2, \n,ok\n", "drop-rows-any-missing", json!({}));
+    assert_eq!(result["preview"], json!([["1", "ok"]]));
+}
+
+#[test]
+fn directional_fill_uses_nearest_value_and_leaves_unbounded_edges_blank() {
+    let forward = operation(
+        "group,id\n,A\nwest,B\n,C\n",
+        "fill-forward",
+        json!({"column":"group"}),
+    );
+    assert_eq!(
+        forward["preview"],
+        json!([["", "A"], ["west", "B"], ["west", "C"]])
+    );
+    let backward = operation(
+        "group,id\n,A\nwest,B\n,C\n, D\n",
+        "fill-backward",
+        json!({"column":"group"}),
+    );
+    assert_eq!(
+        backward["preview"],
+        json!([["west", "A"], ["west", "B"], ["", "C"], ["", " D"]])
+    );
+}
+
+#[test]
+fn empty_column_removal_and_row_reversal_preserve_remaining_values() {
+    let source = "id,blank\n1, \n2,\n";
+    assert_eq!(
+        operation(source, "drop-empty-columns", json!({}))["headers"],
+        json!(["id"])
+    );
+    assert_eq!(
+        operation("id\n1\n2\n3\n", "reverse-rows", json!({}))["preview"],
+        json!([["3"], ["2"], ["1"]])
+    );
+    assert!(fails("a,b\n, \n", "drop-empty-columns", json!({})));
+}
+
+#[test]
+fn all_ten_added_operations_replay_in_order_in_a_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input.csv");
+    let project = dir.path().join("project.json");
+    fs::write(
+        &input,
+        "id,name,tag,route,empty\n1,  Ada  ,A,, \n2, Grace ,,west,\n",
+    )
+    .unwrap();
+    fs::write(
+        &project,
+        json!({"schema_version":1,"steps":[
+            {"operation":"filter-not-equal","column":"id","value":"9"},
+            {"operation":"filter-contains-insensitive","column":"name","value":"a"},
+            {"operation":"filter-starts-with","column":"name","value":" "},
+            {"operation":"filter-ends-with","column":"name","value":" "},
+            {"operation":"replace-literal","column":"name","find":"  ","replace":" "},
+            {"operation":"fill-backward","column":"route"},
+            {"operation":"fill-forward","column":"tag"},
+            {"operation":"drop-empty-columns"},
+            {"operation":"drop-rows-any-missing"},
+            {"operation":"reverse-rows"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let result = handle(
+        Request {
+            operation: "run-project".into(),
+            input,
+            parameter: project.to_string_lossy().into_owned(),
+            ..Request::default()
+        },
+        Job::new(),
+    )
+    .unwrap();
+    let result: Value = serde_json::from_str(&result.preview).unwrap();
+    assert_eq!(result["headers"], json!(["id", "name", "tag", "route"]));
+    assert_eq!(
+        result["preview"],
+        json!([["2", " Grace ", "A", "west"], ["1", " Ada ", "A", "west"]])
+    );
+}
+
+#[test]
 fn all_ten_transformations_replay_in_a_version_one_project() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("input.csv");

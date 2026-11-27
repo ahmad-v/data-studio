@@ -116,6 +116,36 @@ pub enum Step {
     DropColumns {
         columns: Vec<String>,
     },
+    FilterNotEqual {
+        column: String,
+        value: String,
+    },
+    FilterContainsInsensitive {
+        column: String,
+        value: String,
+    },
+    FilterStartsWith {
+        column: String,
+        value: String,
+    },
+    FilterEndsWith {
+        column: String,
+        value: String,
+    },
+    ReplaceLiteral {
+        column: String,
+        find: String,
+        replace: String,
+    },
+    DropRowsAnyMissing {},
+    FillForward {
+        column: String,
+    },
+    FillBackward {
+        column: String,
+    },
+    DropEmptyColumns {},
+    ReverseRows {},
 }
 
 impl Project {
