@@ -67,6 +67,16 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | filter-number-less | Keep finite numeric values strictly below a threshold | Linux route and project fixtures passed; hosted matrix pending |
 | filter-number-less-equal | Keep finite numeric values at or below a threshold | Linux route and project fixtures passed; hosted matrix pending |
 | filter-number-between | Keep finite numeric values within inclusive bounds | Linux route and project fixtures passed; hosted matrix pending |
+| add-numeric-columns | Add finite numeric columns | Linux route and project fixtures passed; hosted matrix pending |
+| subtract-numeric-columns | Subtract finite numeric columns | Linux route and project fixtures passed; hosted matrix pending |
+| multiply-numeric-columns | Multiply finite numeric columns | Linux route and project fixtures passed; hosted matrix pending |
+| divide-numeric-columns | Divide finite numeric columns; zero is rejected | Linux route and project fixtures passed; hosted matrix pending |
+| percent-change-column | Compute percent change; zero baseline is rejected | Linux route and project fixtures passed; hosted matrix pending |
+| absolute-value-column | Add absolute value column | Linux route and project fixtures passed; hosted matrix pending |
+| square-root-column | Add square root column for nonnegative values | Linux route and project fixtures passed; hosted matrix pending |
+| log10-column | Add base-10 logarithm column for positive values | Linux route and project fixtures passed; hosted matrix pending |
+| round-numeric-column | Round numeric text at precision -12 through 12 | Linux route and project fixtures passed; hosted matrix pending |
+| clip-numeric-column | Clamp finite numeric values to inclusive bounds | Linux route and project fixtures passed; hosted matrix pending |
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
 | correlation | Pearson coefficient on complete numeric pairs | Linux fixture-tested |

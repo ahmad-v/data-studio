@@ -72,6 +72,16 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"filter-number-less",label:"Filter number less than",hint:r#"Parameter JSON: {"column":"score","value":10}. Finite numeric cells only; blanks are excluded."#},
  Operation{id:"filter-number-less-equal",label:"Filter number less than or equal",hint:r#"Parameter JSON: {"column":"score","value":10}. Inclusive finite numeric threshold; blanks are excluded."#},
  Operation{id:"filter-number-between",label:"Filter number between",hint:r#"Parameter JSON: {"column":"score","lower":10,"upper":20}. Inclusive finite bounds; lower must not exceed upper."#},
+ Operation{id:"add-numeric-columns",label:"Add numeric columns",hint:r#"Parameter JSON: {"left":"income","right":"bonus","name":"total"}. Adds finite numeric values; blank inputs yield blank results."#},
+ Operation{id:"subtract-numeric-columns",label:"Subtract numeric columns",hint:r#"Parameter JSON: {"left":"income","right":"cost","name":"net"}. Computes left minus right; blank inputs yield blank results."#},
+ Operation{id:"multiply-numeric-columns",label:"Multiply numeric columns",hint:r#"Parameter JSON: {"left":"quantity","right":"price","name":"amount"}. Blank inputs yield blank results."#},
+ Operation{id:"divide-numeric-columns",label:"Divide numeric columns",hint:r#"Parameter JSON: {"left":"amount","right":"quantity","name":"unit_price"}. Division by zero fails; blank inputs yield blank results."#},
+ Operation{id:"percent-change-column",label:"Calculate percent change",hint:r#"Parameter JSON: {"current":"after","baseline":"before","name":"change_pct"}. Computes (current-baseline)/baseline*100; zero baselines fail."#},
+ Operation{id:"absolute-value-column",label:"Add absolute values",hint:r#"Parameter JSON: {"column":"difference","name":"magnitude"}. Blank cells remain blank."#},
+ Operation{id:"square-root-column",label:"Add square roots",hint:r#"Parameter JSON: {"column":"area","name":"side"}. Negative inputs fail; blanks remain blank."#},
+ Operation{id:"log10-column",label:"Add base-10 logarithms",hint:r#"Parameter JSON: {"column":"amount","name":"log_amount"}. Inputs must be positive; blanks remain blank."#},
+ Operation{id:"round-numeric-column",label:"Round numeric column",hint:r#"Parameter JSON: {"column":"amount","name":"rounded","decimal_places":2}. Precision must be from -12 to 12; blanks remain blank."#},
+ Operation{id:"clip-numeric-column",label:"Clip numeric column",hint:r#"Parameter JSON: {"column":"score","name":"bounded","minimum":0,"maximum":100}. Bounds are inclusive, finite, and ordered."#},
  Operation{id:"replace-literal",label:"Replace literal text",hint:r#"Parameter JSON: {"column":"notes","find":"old","replace":"new"}. Replaces all non-overlapping literal matches in one column."#},
  Operation{id:"drop-rows-any-missing",label:"Drop rows with any missing cells",hint:"Removes a row when any cell is blank or whitespace-only."},
  Operation{id:"fill-forward",label:"Fill forward",hint:r#"Parameter JSON: {"column":"group"}. Fills blank cells from the nearest preceding nonblank value; leading blanks remain blank."#},
@@ -370,6 +380,16 @@ fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
         | Step::FilterNumberLess { .. }
         | Step::FilterNumberLessEqual { .. }
         | Step::FilterNumberBetween { .. }
+        | Step::AddNumericColumns { .. }
+        | Step::SubtractNumericColumns { .. }
+        | Step::MultiplyNumericColumns { .. }
+        | Step::DivideNumericColumns { .. }
+        | Step::PercentChangeColumn { .. }
+        | Step::AbsoluteValueColumn { .. }
+        | Step::SquareRootColumn { .. }
+        | Step::Log10Column { .. }
+        | Step::RoundNumericColumn { .. }
+        | Step::ClipNumericColumn { .. }
         | Step::ReplaceLiteral { .. }
         | Step::DropRowsAnyMissing { .. }
         | Step::FillForward { .. }
@@ -497,6 +517,16 @@ fn request_step(operation: &str, parameter: &str) -> Result<Option<Step>> {
             | "filter-number-less"
             | "filter-number-less-equal"
             | "filter-number-between"
+            | "add-numeric-columns"
+            | "subtract-numeric-columns"
+            | "multiply-numeric-columns"
+            | "divide-numeric-columns"
+            | "percent-change-column"
+            | "absolute-value-column"
+            | "square-root-column"
+            | "log10-column"
+            | "round-numeric-column"
+            | "clip-numeric-column"
             | "replace-literal"
             | "fill-forward"
             | "fill-backward"
@@ -1091,6 +1121,16 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         | "filter-number-less"
         | "filter-number-less-equal"
         | "filter-number-between"
+        | "add-numeric-columns"
+        | "subtract-numeric-columns"
+        | "multiply-numeric-columns"
+        | "divide-numeric-columns"
+        | "percent-change-column"
+        | "absolute-value-column"
+        | "square-root-column"
+        | "log10-column"
+        | "round-numeric-column"
+        | "clip-numeric-column"
         | "replace-literal"
         | "drop-rows-any-missing"
         | "fill-forward"

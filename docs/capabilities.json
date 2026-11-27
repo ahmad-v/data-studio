@@ -518,6 +518,76 @@
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
+      "operation": "add-numeric-columns",
+      "description": "Add two finite numeric columns into a bounded derived text column",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "subtract-numeric-columns",
+      "description": "Subtract one finite numeric column from another into a derived text column",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "multiply-numeric-columns",
+      "description": "Multiply two finite numeric columns into a derived text column",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "divide-numeric-columns",
+      "description": "Divide finite numeric columns while rejecting zero divisors",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "percent-change-column",
+      "description": "Compute percent change between finite numeric columns and reject zero baselines",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "absolute-value-column",
+      "description": "Create a bounded column of finite numeric absolute values",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "square-root-column",
+      "description": "Create a bounded column of square roots for nonnegative numeric inputs",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "log10-column",
+      "description": "Create a bounded column of base-10 logarithms for positive numeric inputs",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "round-numeric-column",
+      "description": "Round finite numeric values at precision from -12 through 12 decimal places",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "clip-numeric-column",
+      "description": "Clamp finite numeric values to inclusive finite ordered bounds",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
+    },
+    {
       "operation": "filter-contains-insensitive",
       "description": "Case-insensitive substring filter using Unicode lowercase mapping",
       "status": "implemented-unverified",

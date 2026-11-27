@@ -153,6 +153,54 @@ pub enum Step {
         lower: f64,
         upper: f64,
     },
+    AddNumericColumns {
+        left: String,
+        right: String,
+        name: String,
+    },
+    SubtractNumericColumns {
+        left: String,
+        right: String,
+        name: String,
+    },
+    MultiplyNumericColumns {
+        left: String,
+        right: String,
+        name: String,
+    },
+    DivideNumericColumns {
+        left: String,
+        right: String,
+        name: String,
+    },
+    PercentChangeColumn {
+        current: String,
+        baseline: String,
+        name: String,
+    },
+    AbsoluteValueColumn {
+        column: String,
+        name: String,
+    },
+    SquareRootColumn {
+        column: String,
+        name: String,
+    },
+    Log10Column {
+        column: String,
+        name: String,
+    },
+    RoundNumericColumn {
+        column: String,
+        name: String,
+        decimal_places: i32,
+    },
+    ClipNumericColumn {
+        column: String,
+        name: String,
+        minimum: f64,
+        maximum: f64,
+    },
     ReplaceLiteral {
         column: String,
         find: String,
