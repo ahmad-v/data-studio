@@ -5,7 +5,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | Operation | Scope | Status |
 |---|---|---|
 | drop-missing | Drop typed nulls from CSV/TSV and supported scalar Parquet routes | New regression fixture; hosted verification pending |
-| fill-missing | Fill blanks in a selected column | Linux fixture-tested |
+| fill-missing | Fill blanks in a selected column | Legacy route Linux fixture-tested; typed project replacement validates against the existing column type (new targeted tests pending CI) |
 | rename-column | Typed CSV/TSV and supported flat Parquet rename; typed preview, CSV/TSV and Parquet output | Regression route added; new hosted verification pending |
 | select-columns | Typed CSV/TSV and supported flat Parquet selection; typed preview, CSV/TSV and Parquet output | Regression route added; new hosted verification pending |
 | counts | Exact value counts for a column | Linux fixture-tested |
@@ -26,11 +26,11 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
-| quantiles | R7 quartiles, median and IQR | Linux interpolation fixture-tested |
-| standard-error | Sample standard error | Linux sample-SD reference-tested |
-| mean-ci | Two-sided 95% Student-t mean interval | Linux critical-value and interval reference-tested |
-| bootstrap-mean-ci | Deterministic percentile bootstrap mean interval, 2,000 resamples | Linux deterministic fixture-tested, 5,000-row cap |
-| bootstrap-median-ci | Deterministic percentile bootstrap median interval, 2,000 resamples | Linux deterministic fixture-tested, 5,000-row cap |
+| quantiles | R7 quartiles, median and IQR; typed CSV/TSV/Parquet input excludes nulls | Linux interpolation and typed end-to-end fixture-tested |
+| standard-error | Sample standard error; typed numeric values reject lossy large-integer conversion | Linux sample-SD reference and precision-guard fixture-tested |
+| mean-ci | Two-sided 95% Student-t mean interval; typed CSV/TSV/Parquet input excludes nulls | Linux critical-value and typed operation fixture-tested |
+| bootstrap-mean-ci | Deterministic percentile bootstrap mean interval, 2,000 resamples; typed scalar input | Linux deterministic fixture-tested, 5,000-row cap |
+| bootstrap-median-ci | Deterministic percentile bootstrap median interval, 2,000 resamples; typed scalar input | Linux deterministic fixture-tested, 5,000-row cap |
 | welch-t-test | Unequal-variance two-sample t test, interval and p value | Linux t-distribution reference-tested |
 | paired-t-test | Paired two-sided Student-t test and interval | Linux difference-vector fixture-tested |
 | one-way-anova | Independent-groups one-way ANOVA | Linux reference fixture-tested |
@@ -62,7 +62,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | filter-ends-with | Case-sensitive literal suffix filter | Linux route and project fixtures passed; hosted matrix pending |
 | replace-literal | Bounded non-overlapping literal text replacement | Linux route and project fixtures passed; hosted matrix pending |
 | drop-rows-any-missing | Remove rows with any blank or whitespace-only cell | Linux route and project fixtures passed; hosted matrix pending |
-| fill-forward | Fill blanks from nearest preceding value | Linux route and project fixtures passed; hosted matrix pending |
+| fill-forward | Fill blanks from nearest preceding value | Legacy route and project fixtures passed; typed project implementation preserves scalar type (new tests pending CI) |
 | fill-backward | Fill blanks from nearest following value | Linux route and project fixtures passed; hosted matrix pending |
 | drop-empty-columns | Remove all-blank columns, retaining at least one | Linux route and project fixtures passed; hosted matrix pending |
 | reverse-rows | Reverse table row order | Linux route and project fixtures passed; hosted matrix pending |

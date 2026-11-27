@@ -1,3 +1,4 @@
+use arrow_array::Array;
 use localwright_core::{Job, Request};
 use std::fs;
 
@@ -103,4 +104,88 @@ fn typed_inequality_and_null_filters_are_type_aware_and_guard_precision() {
     )
     .is_err());
     assert!(!rejected_output.exists());
+}
+
+#[test]
+fn ordinary_missing_value_fills_use_typed_scalars_for_parquet() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input.csv");
+    let original = "score\n01\n\"\"\n3\n";
+    fs::write(&input, original).unwrap();
+
+    let filled = dir.path().join("filled.parquet");
+    run(&input, &filled, "fill-missing", "score=02");
+    let bytes = localwright_core::read_bounded(&filled, 16 * 1024 * 1024).unwrap();
+    let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+        bytes::Bytes::from(bytes),
+    )
+    .unwrap();
+    assert_eq!(
+        reader.schema().field(0).data_type(),
+        &arrow_schema::DataType::Int64
+    );
+    let batch = reader.build().unwrap().next().unwrap().unwrap();
+    let values = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .unwrap();
+    assert_eq!(values.values(), &[1, 2, 3]);
+    assert_eq!(values.null_count(), 0);
+
+    let backwards_input = dir.path().join("backwards.csv");
+    fs::write(&backwards_input, "score\n\"\"\n2\n\"\"\n4\n\"\"\n").unwrap();
+    let forward = dir.path().join("forward.parquet");
+    run(
+        &backwards_input,
+        &forward,
+        "fill-forward",
+        r#"{"column":"score"}"#,
+    );
+    let bytes = localwright_core::read_bounded(&forward, 16 * 1024 * 1024).unwrap();
+    let batch = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+        bytes::Bytes::from(bytes),
+    )
+    .unwrap()
+    .build()
+    .unwrap()
+    .next()
+    .unwrap()
+    .unwrap();
+    let values = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .unwrap();
+    assert_eq!(
+        values.iter().collect::<Vec<_>>(),
+        [None, Some(2), Some(2), Some(4), Some(4)]
+    );
+
+    let backward = dir.path().join("backward.parquet");
+    run(
+        &backwards_input,
+        &backward,
+        "fill-backward",
+        r#"{"column":"score"}"#,
+    );
+    let bytes = localwright_core::read_bounded(&backward, 16 * 1024 * 1024).unwrap();
+    let batch = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+        bytes::Bytes::from(bytes),
+    )
+    .unwrap()
+    .build()
+    .unwrap()
+    .next()
+    .unwrap()
+    .unwrap();
+    let values = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .unwrap();
+    assert_eq!(
+        values.iter().collect::<Vec<_>>(),
+        [Some(2), Some(2), Some(4), Some(4), None]
+    );
 }

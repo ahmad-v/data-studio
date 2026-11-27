@@ -1439,6 +1439,110 @@ impl TypedTable {
         self.retain_rows(&keep, job)
     }
 
+    /// Fill null cells with one literal parsed using the column's existing type.
+    /// The source spelling is retained for delimited output, while Parquet keeps
+    /// the original Arrow type and nullability semantics.
+    pub(crate) fn fill_missing(&mut self, name: &str, literal: &str, job: &Job) -> Result<()> {
+        if is_missing(literal) {
+            return Err(Error::input("Replacement value must not be blank"));
+        }
+        let index = self.column_index(name)?;
+        let column = &mut self.columns[index];
+        let mut category_ids = HashMap::with_capacity(column.categories.len());
+        for (index, category) in column.categories.iter().enumerate() {
+            let id = u32::try_from(index)
+                .map_err(|_| Error::new(ErrorKind::Limit, "Too many categories"))?;
+            category_ids.insert(category.clone(), id);
+        }
+        let mut categories = column.categories.clone();
+        let replacement = convert_cell(
+            &column.name,
+            column.kind,
+            literal,
+            &mut categories,
+            &mut category_ids,
+        )?;
+        if matches!(&replacement, Scalar::Null) {
+            return Err(Error::input("Replacement value must not be blank"));
+        }
+        for row in 0..self.rows {
+            job.check()?;
+            if matches!(&column.values[row], Scalar::Null) {
+                column.values[row] = replacement.clone();
+                column.raw_text[row] = Some(literal.to_owned());
+            }
+        }
+        column.categories = categories;
+        Ok(())
+    }
+
+    /// Propagate the nearest non-null scalar forward or backward without
+    /// changing the column type or the original order of any non-null values.
+    pub(crate) fn fill_direction(&mut self, name: &str, forward: bool, job: &Job) -> Result<()> {
+        let index = self.column_index(name)?;
+        let column = &mut self.columns[index];
+        let mut previous: Option<(Scalar, Option<String>)> = None;
+        if forward {
+            for row in 0..self.rows {
+                job.check()?;
+                if matches!(&column.values[row], Scalar::Null) {
+                    if let Some((value, raw)) = &previous {
+                        column.values[row] = value.clone();
+                        column.raw_text[row] = raw.clone();
+                    }
+                } else {
+                    previous = Some((column.values[row].clone(), column.raw_text[row].clone()));
+                }
+            }
+        } else {
+            for row in (0..self.rows).rev() {
+                job.check()?;
+                if matches!(&column.values[row], Scalar::Null) {
+                    if let Some((value, raw)) = &previous {
+                        column.values[row] = value.clone();
+                        column.raw_text[row] = raw.clone();
+                    }
+                } else {
+                    previous = Some((column.values[row].clone(), column.raw_text[row].clone()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Extract finite numeric observations for statistics while preserving null
+    /// semantics. Integer-to-float conversion is limited to the exact f64 range
+    /// so statistics never silently merge distinct large integer values.
+    pub(crate) fn numeric_values(&self, name: &str, job: &Job) -> Result<Vec<f64>> {
+        const MAX_EXACT_INTEGER: u64 = 9_007_199_254_740_992;
+        let index = self.column_index(name)?;
+        let column = &self.columns[index];
+        let mut values = Vec::with_capacity(self.rows);
+        for value in &column.values {
+            job.check()?;
+            let number = match value {
+                Scalar::Null => continue,
+                Scalar::Int64(value) if value.unsigned_abs() <= MAX_EXACT_INTEGER => *value as f64,
+                Scalar::UInt64(value) if *value <= MAX_EXACT_INTEGER => *value as f64,
+                Scalar::Float64(value) if value.is_finite() => *value,
+                Scalar::Int64(_) | Scalar::UInt64(_) => {
+                    return Err(Error::input(format!(
+                        "Column {:?} contains integers outside the exact f64 range",
+                        column.name
+                    )))
+                }
+                _ => {
+                    return Err(Error::input(format!(
+                        "Column {:?} must have a numeric type",
+                        column.name
+                    )))
+                }
+            };
+            values.push(number);
+        }
+        Ok(values)
+    }
+
     pub(crate) fn drop_rows_any_missing(&mut self, job: &Job) -> Result<()> {
         let mut keep = vec![true; self.rows];
         for column in &self.columns {
@@ -2494,6 +2598,64 @@ mod tests {
         assert_eq!(typed.columns[0].categories[0], "North");
         assert_eq!(typed.columns[0].values, [Scalar::Categorical(0)]);
         assert_eq!(typed.columns[1].values, [Scalar::Int64(1)]);
+    }
+
+    #[test]
+    fn typed_missing_fills_keep_scalar_types_and_distinct_null_semantics() {
+        let source = table(
+            vec!["score"],
+            vec![vec!["01"], vec![""], vec!["3"], vec![" "], vec!["5"]],
+        );
+        let mut typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
+        typed.fill_missing("score", "02", &Job::new()).unwrap();
+        assert_eq!(typed.columns[0].kind, ColumnType::Int64);
+        assert_eq!(
+            typed.columns[0].values,
+            [
+                Scalar::Int64(1),
+                Scalar::Int64(2),
+                Scalar::Int64(3),
+                Scalar::Int64(2),
+                Scalar::Int64(5),
+            ]
+        );
+        assert!(typed
+            .fill_missing("score", "not a number", &Job::new())
+            .is_err());
+        assert!(typed.fill_missing("score", "  ", &Job::new()).is_err());
+        assert_eq!(typed.columns[0].values[1], Scalar::Int64(2));
+
+        let mut forward = TypedTable::infer(
+            &table(
+                vec!["score"],
+                vec![vec![""], vec!["2"], vec![""], vec!["4"], vec![""]],
+            ),
+            SchemaRequest::default(),
+            &Job::new(),
+        )
+        .unwrap();
+        forward.fill_direction("score", true, &Job::new()).unwrap();
+        assert_eq!(
+            forward.columns[0].values,
+            [
+                Scalar::Null,
+                Scalar::Int64(2),
+                Scalar::Int64(2),
+                Scalar::Int64(4),
+                Scalar::Int64(4),
+            ]
+        );
+        forward.fill_direction("score", false, &Job::new()).unwrap();
+        assert_eq!(
+            forward.columns[0].values,
+            [
+                Scalar::Int64(2),
+                Scalar::Int64(2),
+                Scalar::Int64(2),
+                Scalar::Int64(4),
+                Scalar::Int64(4),
+            ]
+        );
     }
 
     #[test]

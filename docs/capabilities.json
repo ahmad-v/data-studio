@@ -148,12 +148,12 @@
     },
     {
       "operation": "run-project",
-      "description": "Replay version 1 text projects or typed pipelines with comparisons, text predicates, type-aware deduplication, bounded numeric expressions, schema-preserving rename, type-checked inner joins, typed grouped sum/mean and Arrow-preserving Parquet output",
+      "description": "Replay version 1 text projects or typed pipelines with comparisons, text predicates, type-aware deduplication, bounded numeric expressions, schema-preserving rename, type-checked inner joins, typed grouped sum/mean, type-checked missing-value fills and Arrow-preserving Parquet output",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; typed project fixtures cover delimited columnar import, numeric expressions, text predicates, comparisons, type-aware duplicate removal, null propagation, metadata round-trip, stable sorting, type-preserving rename/join, grouped sum/mean and aggregation overflow; expanded hosted verification pending"
+      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; typed project fixtures cover delimited columnar import, numeric expressions, text predicates, comparisons, type-aware duplicate removal, null propagation, metadata round-trip, stable sorting, type-preserving rename/join, grouped sum/mean and aggregation overflow; new type-preserving missing-value fill tests are pending hosted verification"
     },
     {
       "operation": "select-sql",
@@ -223,7 +223,7 @@
     },
     {
       "operation": "quantiles",
-      "description": "R7 quartiles, median and interquartile range",
+      "description": "R7 quartiles, median and interquartile range; typed CSV/TSV/Parquet numeric inputs exclude nulls and preserve integer precision",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
@@ -232,7 +232,7 @@
     },
     {
       "operation": "standard-error",
-      "description": "Sample standard deviation and standard error of the mean",
+      "description": "Sample standard deviation and standard error; typed CSV/TSV/Parquet inputs reject integers outside exact f64 conversion range",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
@@ -241,7 +241,7 @@
     },
     {
       "operation": "mean-ci",
-      "description": "Two-sided 95 percent Student-t confidence interval for a numeric mean",
+      "description": "Two-sided 95 percent Student-t confidence interval; typed CSV/TSV/Parquet numeric inputs exclude nulls",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
@@ -250,7 +250,7 @@
     },
     {
       "operation": "bootstrap-mean-ci",
-      "description": "Deterministic 2,000-resample percentile bootstrap interval for a mean",
+      "description": "Deterministic 2,000-resample percentile bootstrap interval for a mean with typed scalar input support",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
@@ -259,7 +259,7 @@
     },
     {
       "operation": "bootstrap-median-ci",
-      "description": "Deterministic 2,000-resample percentile bootstrap interval for a median",
+      "description": "Deterministic 2,000-resample percentile bootstrap interval for a median with typed scalar input support",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
@@ -504,105 +504,135 @@
       "operation": "filter-number-greater",
       "description": "Keep rows whose finite numeric cell is strictly greater than a threshold; blanks are excluded",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Typed CSV/TSV and supported scalar Parquet route added; nulls excluded and unsafe integer precision rejected; hosted verification pending"
     },
     {
       "operation": "filter-number-greater-equal",
       "description": "Keep rows whose finite numeric cell is greater than or equal to a threshold; blanks are excluded",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Typed CSV/TSV and supported scalar Parquet route added; nulls excluded and unsafe integer precision rejected; hosted verification pending"
     },
     {
       "operation": "filter-number-less",
       "description": "Keep rows whose finite numeric cell is strictly less than a threshold; blanks are excluded",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Typed CSV/TSV and supported scalar Parquet route added; nulls excluded and unsafe integer precision rejected; hosted verification pending"
     },
     {
       "operation": "filter-number-less-equal",
       "description": "Keep rows whose finite numeric cell is less than or equal to a threshold; blanks are excluded",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Typed CSV/TSV and supported scalar Parquet route added; nulls excluded and unsafe integer precision rejected; hosted verification pending"
     },
     {
       "operation": "filter-number-between",
       "description": "Keep rows whose finite numeric cell falls within inclusive ordered bounds; blanks are excluded",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Typed CSV/TSV and supported scalar Parquet route added; inclusive bounds, null exclusion and unsafe integer precision rejection; hosted verification pending"
     },
     {
       "operation": "add-numeric-columns",
       "description": "Add two finite numeric columns into a bounded derived text column",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
       "operation": "subtract-numeric-columns",
       "description": "Subtract one finite numeric column from another into a derived text column",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
       "operation": "multiply-numeric-columns",
       "description": "Multiply two finite numeric columns into a derived text column",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
       "operation": "divide-numeric-columns",
       "description": "Divide finite numeric columns while rejecting zero divisors",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
       "operation": "percent-change-column",
       "description": "Compute percent change between finite numeric columns and reject zero baselines",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
       "operation": "absolute-value-column",
       "description": "Create a bounded column of finite numeric absolute values",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
       "operation": "square-root-column",
       "description": "Create a bounded column of square roots for nonnegative numeric inputs",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
       "operation": "log10-column",
       "description": "Create a bounded column of base-10 logarithms for positive numeric inputs",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
       "operation": "round-numeric-column",
       "description": "Round finite numeric values at precision from -12 through 12 decimal places",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
       "operation": "clip-numeric-column",
       "description": "Clamp finite numeric values to inclusive finite ordered bounds",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux route and project fixtures passed; hosted matrix pending"
     },
     {
@@ -652,21 +682,21 @@
     },
     {
       "operation": "fill-forward",
-      "description": "Fill blanks from the preceding nonblank value in a column",
+      "description": "Fill null cells from the nearest preceding typed value in a typed project, or preceding nonblank text in a legacy operation",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Legacy Linux route fixtures passed; new typed-project scalar preservation tests pending hosted verification"
     },
     {
       "operation": "fill-backward",
-      "description": "Fill blanks from the following nonblank value in a column",
+      "description": "Fill null cells from the nearest following typed value in a typed project, or following nonblank text in a legacy operation",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Legacy Linux route fixtures passed; new typed-project scalar preservation tests pending hosted verification"
     },
     {
       "operation": "drop-empty-columns",

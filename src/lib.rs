@@ -31,7 +31,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. CSV, TSV and supported scalar Parquet inputs preserve inferred types in previews and Parquet output; CSV/TSV output serializes nulls as empty fields."},
- Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware comparisons, stable sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), and typed `group-sum`/`group-mean`; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware comparisons, stable sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving `fill-missing`/`fill-forward`/`fill-backward`; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
@@ -1058,6 +1058,9 @@ fn try_typed_basic_operation(
             | "rename-column"
             | "drop-missing"
             | "drop-rows-any-missing"
+            | "fill-missing"
+            | "fill-forward"
+            | "fill-backward"
             | "head-rows"
             | "tail-rows"
             | "reverse-rows"
@@ -1162,6 +1165,9 @@ fn try_typed_basic_operation(
             Step::SelectColumns { columns } => table.select_columns(&columns, job)?,
             Step::RenameColumn { column, name } => table.rename_column(&column, name)?,
             Step::DropMissing { column } => table.drop_missing(&column, job)?,
+            Step::FillMissing { column, value } => table.fill_missing(&column, &value, job)?,
+            Step::FillForward { column } => table.fill_direction(&column, true, job)?,
+            Step::FillBackward { column } => table.fill_direction(&column, false, job)?,
             Step::DropRowsAnyMissing {} => table.drop_rows_any_missing(job)?,
             Step::HeadRows { rows } => table.head_rows(rows, job)?,
             Step::TailRows { rows } => table.tail_rows(rows, job)?,
@@ -1188,6 +1194,59 @@ fn try_typed_basic_operation(
     }))
 }
 
+fn try_typed_numeric_statistic(
+    operation: &str,
+    parameter: &str,
+    input: &Path,
+    output: &Path,
+    job: &Job,
+) -> Result<Option<Outcome>> {
+    if !matches!(
+        operation,
+        "quantiles" | "standard-error" | "mean-ci" | "bootstrap-mean-ci" | "bootstrap-median-ci"
+    ) {
+        return Ok(None);
+    }
+    let input_kind = input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    if !matches!(input_kind.as_deref(), Some("csv" | "tsv" | "parquet")) {
+        return Ok(None);
+    }
+    if !output.as_os_str().is_empty()
+        && !output
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        return Err(Error::input("Statistical reports require a .json output"));
+    }
+    let table = typed::TypedTable::from_path(input, None, typed::SchemaRequest::default(), job)?;
+    let values = table.numeric_values(parameter, job)?;
+    let report = match operation {
+        "quantiles" => statistics::quantiles(&values),
+        "standard-error" => statistics::standard_error(&values),
+        "mean-ci" => statistics::mean_confidence_interval(&values),
+        "bootstrap-mean-ci" => statistics::bootstrap_mean_interval(&values, job),
+        _ => statistics::bootstrap_median_interval(&values, job),
+    }?;
+    let text = serde_json::to_string_pretty(&report)?;
+    let written = if output.as_os_str().is_empty() {
+        None
+    } else {
+        job.check()?;
+        write_bytes(output, text.as_bytes())?;
+        Some(output.to_path_buf())
+    };
+    Ok(Some(Outcome {
+        preview: text,
+        written,
+        warnings: vec!["Statistics read typed numeric columns directly; null values are excluded. Integer values outside the exact f64 range are rejected to prevent silent precision loss. The source data is unchanged.".into()],
+        ..Outcome::default()
+    }))
+}
+
 pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     let project = if r.operation == "run-project" {
         Some(Project::open(Path::new(&r.parameter))?)
@@ -1210,6 +1269,11 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         return Err(Error::input(
             "Project worksheet selection requires XLSX input",
         ));
+    }
+    if let Some(outcome) =
+        try_typed_numeric_statistic(&r.operation, &r.parameter, &r.input, &r.output, &j)?
+    {
+        return Ok(outcome);
     }
     if let Some(outcome) =
         try_typed_basic_operation(&r.operation, &r.parameter, &r.input, &r.output, &j)?
@@ -1288,7 +1352,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 preview: preview.chars().take(24000).collect(),
                 written,
                 warnings: vec![format!(
-                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed group-sum/group-mean preserve key type and metadata, group null keys together, omit null values and return null for all-missing groups. Typed pipelines support filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows and reverse-rows. Joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
+                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed group-sum/group-mean preserve key type and metadata, group null keys together, omit null values and return null for all-missing groups. Missing-value fills parse replacements against the existing column type and preserve source spellings in previews. Typed pipelines support filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, fill-missing, fill-forward, fill-backward, drop-rows-any-missing, head-rows, tail-rows and reverse-rows. Joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
                 )],
                 ..Outcome::default()
             });
@@ -1884,6 +1948,69 @@ mod tests {
     }
 
     #[test]
+    fn typed_project_fills_missing_values_without_changing_schema_or_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("fill-input.csv");
+        let project_path = dir.path().join("fill-project.json");
+        let output = dir.path().join("filled.parquet");
+        let original = "score,manual\n,alpha\n2,\n, \n4,last\n,\n";
+        std::fs::write(&input, original).unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {"overrides": {"score": "int64"}},
+                "steps": [
+                    {"operation": "fill-forward", "column": "score"},
+                    {"operation": "fill-backward", "column": "score"},
+                    {"operation": "fill-missing", "column": "manual", "value": "replacement"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(0).data_type(), &DataType::Int64);
+        let batch = reader.build().unwrap().next().unwrap().unwrap();
+        let scores = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(scores.values(), &[2, 2, 2, 4, 4]);
+        assert_eq!(scores.null_count(), 0);
+        let labels = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::StringArray>()
+            .unwrap();
+        assert_eq!(
+            labels.iter().collect::<Vec<_>>(),
+            [
+                Some("alpha"),
+                Some("replacement"),
+                Some("replacement"),
+                Some("last"),
+                Some("replacement"),
+            ]
+        );
+    }
+
+    #[test]
     fn typed_project_rejects_incompatible_filter_without_creating_output() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("typed-input.csv");
@@ -2338,6 +2465,45 @@ mod tests {
             std::fs::read_to_string(delimited_output).unwrap(),
             "id,score,label\n2,10,a\n1,10,c\n"
         );
+    }
+
+    #[test]
+    fn typed_statistics_exclude_nulls_and_reject_lossy_integer_conversion() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("observations.csv");
+        let report = directory.path().join("quantiles.json");
+        let original = "score,label\n1,a\n2,b\n\"\",c\n3,d\n";
+        std::fs::write(&input, original).unwrap();
+
+        let outcome = handle(
+            Request {
+                operation: "quantiles".into(),
+                input: input.clone(),
+                output: report.clone(),
+                parameter: "score".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+        assert_eq!(value["n"], 3);
+        assert_eq!(value["median"], 2.0);
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(report).unwrap(), outcome.preview);
+
+        let lossy = directory.path().join("lossy.csv");
+        std::fs::write(&lossy, "score\n9007199254740993\n").unwrap();
+        assert!(handle(
+            Request {
+                operation: "standard-error".into(),
+                input: lossy,
+                parameter: "score".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .is_err());
     }
 
     #[test]
