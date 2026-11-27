@@ -510,10 +510,13 @@ fn evaluate_numeric_expression(
             };
             let right = evaluate_numeric_expression(right, table, row)?;
             match right {
-                Some(right) if right == 0.0 => {
-                    Err(Error::input("Numeric expression division by zero"))
+                Some(right) => {
+                    if right == 0.0 {
+                        Err(Error::input("Numeric expression division by zero"))
+                    } else {
+                        finite_numeric_result(left / right).map(Some)
+                    }
                 }
-                Some(right) => finite_numeric_result(left / right).map(Some),
                 None => Ok(None),
             }
         }
