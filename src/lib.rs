@@ -94,8 +94,8 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"reverse-rows",label:"Reverse row order",hint:"Reverses table rows without changing their cell values."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
- Operation{id:"line-chart",label:"Line chart SVG",hint:r#"Enter x-column,y-column or JSON {"x":"…","y":"…","title":"…","x_axis":"…","y_axis":"…"}. Complete numeric rows connect in table order. Choose a new .svg file."#},
- Operation{id:"scatter",label:"Scatter SVG",hint:r#"Enter x-column,y-column or JSON with x, y, title, x_axis and y_axis. Numeric complete rows, new .svg output."#},
+ Operation{id:"line-chart",label:"Line chart SVG",hint:r#"Enter x-column,y-column or JSON {"x":"time","y":"signal","title":"…","x_axis":"…","y_axis":"…"}. Multi-series JSON: {"x":"time","series":["control","treatment"],"palette":"batlowS","title":"…","x_axis":"…","y_axis":"…"}. Multi-series figures use a licensed qualitative palette plus distinct markers and line patterns. Writes a new vector .svg."#},
+ Operation{id:"scatter",label:"Scatter SVG",hint:r#"Enter x-column,y-column or JSON with x, y, title, x_axis and y_axis. Multi-series JSON accepts x, series, palette and labels as in line-chart. Uses the licensed batlowS palette by default with distinct markers. Writes a new vector .svg."#},
  Operation{id:"export",label:"Export",hint:"Export to .csv, .tsv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
 pub(crate) struct Table {
@@ -761,7 +761,12 @@ fn column_pair(table: &Table, parameter: &str) -> Result<(usize, usize)> {
 #[serde(deny_unknown_fields)]
 struct FigureParameters {
     x: String,
-    y: String,
+    #[serde(default)]
+    y: Option<String>,
+    #[serde(default)]
+    series: Option<Vec<String>>,
+    #[serde(default)]
+    palette: Option<String>,
     title: Option<String>,
     x_axis: Option<String>,
     y_axis: Option<String>,
@@ -776,7 +781,16 @@ fn figure_request(
         let request: FigureParameters = serde_json::from_str(parameter)
             .map_err(|error| Error::input(format!("Invalid figure parameter JSON: {error}")))?;
         let x_index = column(table, &request.x)?;
-        let y_index = column(table, &request.y)?;
+        let y_name = request
+            .y
+            .as_deref()
+            .ok_or_else(|| Error::input("A single-series figure requires a y column"))?;
+        if request.series.is_some() {
+            return Err(Error::input(
+                "Use either y or series in figure parameters, not both",
+            ));
+        }
+        let y_index = column(table, y_name)?;
         (
             x_index,
             y_index,
@@ -809,6 +823,107 @@ fn figure_request(
         )
     };
     Ok((x, y, title, x_axis, y_axis))
+}
+
+fn export_multi_series_figure(
+    table: &Table,
+    request: &FigureParameters,
+    operation: &str,
+    output: &std::path::Path,
+    job: &Job,
+) -> Result<usize> {
+    use localwright_core::{
+        figure::{FigureLabels, FigureSeries, Marker},
+        palettes::{palette, PaletteKind},
+    };
+
+    let names = request
+        .series
+        .as_deref()
+        .ok_or_else(|| Error::input("A multi-series figure requires series columns"))?;
+    if request.y.is_some() {
+        return Err(Error::input(
+            "Use either y or series in figure parameters, not both",
+        ));
+    }
+    if names.len() < 2 || names.len() > 12 {
+        return Err(Error::input("Multi-series figures require 2–12 series"));
+    }
+    if names.iter().collect::<std::collections::HashSet<_>>().len() != names.len() {
+        return Err(Error::input("Series columns must be unique"));
+    }
+    let x_index = column(table, &request.x)?;
+    let series_indices = names
+        .iter()
+        .map(|name| column(table, name))
+        .collect::<Result<Vec<_>>>()?;
+    let palette_name = request.palette.as_deref().unwrap_or("batlowS");
+    let colors = palette(palette_name)
+        .ok_or_else(|| Error::input(format!("Unknown scientific palette {palette_name:?}")))?;
+    if colors.kind() != PaletteKind::Qualitative || colors.len() < names.len() {
+        return Err(Error::input(
+            "Multi-series figures require a qualitative palette with enough distinct colors",
+        ));
+    }
+
+    let mut points = vec![Vec::new(); names.len()];
+    for row in &table.rows {
+        job.check()?;
+        let Some(x) = numeric_value(&row[x_index])? else {
+            continue;
+        };
+        for (series_index, column_index) in series_indices.iter().enumerate() {
+            let Some(y) = numeric_value(&row[*column_index])? else {
+                continue;
+            };
+            if points[series_index].len() >= 10_000 {
+                return Err(Error::input("Figure point limit"));
+            }
+            points[series_index].push((x, y));
+        }
+    }
+    let markers = [
+        Marker::Circle,
+        Marker::Square,
+        Marker::Triangle,
+        Marker::Diamond,
+        Marker::Cross,
+    ];
+    let figures = names
+        .iter()
+        .zip(points.iter())
+        .enumerate()
+        .map(|(index, (name, data))| {
+            Ok(FigureSeries::new(
+                name,
+                data,
+                colors.series_style(index, markers[index % markers.len()], index % 2 == 1)?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let title = request
+        .title
+        .as_deref()
+        .unwrap_or(if operation == "line-chart" {
+            "Multi-series line chart"
+        } else {
+            "Multi-series scatter plot"
+        });
+    let x_axis = request.x_axis.as_deref().unwrap_or(&table.headers[x_index]);
+    let y_axis = request.y_axis.as_deref().unwrap_or("Value");
+    let labels = FigureLabels {
+        title,
+        x_axis,
+        y_axis,
+    };
+    let svg = if operation == "line-chart" {
+        localwright_core::figure::line_series_svg_labeled(&figures, 1000, 640, labels)?
+    } else {
+        localwright_core::figure::scatter_series_svg_labeled(&figures, 1000, 640, labels)?
+    };
+    job.check()?;
+    write_bytes(output, svg.as_bytes())?;
+    Ok(points.iter().map(Vec::len).sum())
 }
 
 fn numeric_value(value: &str) -> Result<Option<f64>> {
@@ -1485,53 +1600,75 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             linear_regression(&t, x, y, &j)?
         }
         "scatter" | "line-chart" => {
-            let (a, b, title, x_axis, y_axis) = figure_request(&t, &r.parameter, &r.operation)?;
-            if r.output.extension().and_then(|x| x.to_str()) != Some("svg") {
-                return Err(Error::input("Expected .svg"));
-            }
-            let mut points = vec![];
-            for row in &t.rows {
-                j.check()?;
-                if row[a].trim().is_empty() || row[b].trim().is_empty() {
-                    continue;
-                }
-                if points.len() >= 10000 {
-                    return Err(Error::input("Figure point limit"));
-                }
-                points.push((
-                    row[a].trim().parse().map_err(err)?,
-                    row[b].trim().parse().map_err(err)?,
-                ));
-            }
-            let labels = localwright_core::figure::FigureLabels {
-                title: &title,
-                x_axis: &x_axis,
-                y_axis: &y_axis,
-            };
-            if r.operation == "line-chart" {
-                localwright_core::figure::export_line_svg_labeled(
-                    &r.output,
-                    &points,
-                    800,
-                    600,
-                    localwright_core::figure::SeriesStyle::MONOCHROME,
-                    labels,
-                )?;
+            let request = if r.parameter.trim_start().starts_with('{') {
+                Some(
+                    serde_json::from_str::<FigureParameters>(&r.parameter).map_err(|error| {
+                        Error::input(format!("Invalid figure parameter JSON: {error}"))
+                    })?,
+                )
             } else {
-                localwright_core::figure::export_scatter_svg_labeled(
-                    &r.output,
-                    &points,
-                    800,
-                    600,
-                    localwright_core::figure::SeriesStyle::MONOCHROME,
-                    labels,
-                )?;
+                None
+            };
+            if let Some(request) = request.filter(|request| request.series.is_some()) {
+                if r.output
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    != Some("svg")
+                {
+                    return Err(Error::input("Expected .svg"));
+                }
+                let count = export_multi_series_figure(&t, &request, &r.operation, &r.output, &j)?;
+                written = Some(r.output);
+                format!("{count} complete series cases plotted; missing pairs excluded")
+            } else {
+                let (a, b, title, x_axis, y_axis) = figure_request(&t, &r.parameter, &r.operation)?;
+                if r.output.extension().and_then(|x| x.to_str()) != Some("svg") {
+                    return Err(Error::input("Expected .svg"));
+                }
+                let mut points = vec![];
+                for row in &t.rows {
+                    j.check()?;
+                    if row[a].trim().is_empty() || row[b].trim().is_empty() {
+                        continue;
+                    }
+                    if points.len() >= 10000 {
+                        return Err(Error::input("Figure point limit"));
+                    }
+                    points.push((
+                        row[a].trim().parse().map_err(err)?,
+                        row[b].trim().parse().map_err(err)?,
+                    ));
+                }
+                let labels = localwright_core::figure::FigureLabels {
+                    title: &title,
+                    x_axis: &x_axis,
+                    y_axis: &y_axis,
+                };
+                if r.operation == "line-chart" {
+                    localwright_core::figure::export_line_svg_labeled(
+                        &r.output,
+                        &points,
+                        800,
+                        600,
+                        localwright_core::figure::SeriesStyle::MONOCHROME,
+                        labels,
+                    )?;
+                } else {
+                    localwright_core::figure::export_scatter_svg_labeled(
+                        &r.output,
+                        &points,
+                        800,
+                        600,
+                        localwright_core::figure::SeriesStyle::MONOCHROME,
+                        labels,
+                    )?;
+                }
+                written = Some(r.output);
+                format!(
+                    "{} complete cases plotted; missing pairs excluded",
+                    points.len()
+                )
             }
-            written = Some(r.output);
-            format!(
-                "{} complete cases plotted; missing pairs excluded",
-                points.len()
-            )
         }
         "preview"
         | "filter"
@@ -3050,6 +3187,56 @@ mod tests {
         assert!(chart.contains("Group &lt;A&gt;"));
         assert!(chart.contains("Time (s)"));
         assert!(chart.contains("Value &lt;m&gt;"));
+    }
+
+    #[test]
+    fn multi_series_figure_uses_licensed_palette_markers_and_legend() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("series.csv");
+        let output = dir.path().join("series.svg");
+        std::fs::write(&input, "time,control,treatment\n0,1,2\n1,2,4\n2,,6\n").unwrap();
+        let result = handle(
+            Request {
+                operation: "line-chart".into(),
+                input,
+                output: output.clone(),
+                parameter: r#"{"x":"time","series":["control","treatment"],"title":"Trial","x_axis":"Time (s)","y_axis":"Value"}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert!(result.preview.contains("5 complete series cases"));
+        let chart = std::fs::read_to_string(output).unwrap();
+        assert!(chart.contains("control"));
+        assert!(chart.contains("treatment"));
+        assert!(chart.contains("Time (s)"));
+        assert!(chart.contains("Value"));
+        assert!(!chart.contains("<image"));
+        let palette = localwright_core::palettes::palette("batlowS").unwrap();
+        assert!(chart.contains(palette.color(0).unwrap()));
+        assert!(chart.contains(palette.color(1).unwrap()));
+        assert!(chart.contains("<circle"));
+        assert!(chart.contains("stroke-dasharray"));
+
+        let scatter = dir.path().join("scatter.svg");
+        handle(
+            Request {
+                operation: "scatter".into(),
+                input: dir.path().join("series.csv"),
+                output: scatter.clone(),
+                parameter: r#"{"x":"time","series":["control","treatment"],"palette":"batlowS"}"#
+                    .into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let scatter_svg = std::fs::read_to_string(scatter).unwrap();
+        assert!(scatter_svg.contains("control"));
+        assert!(scatter_svg.contains("treatment"));
+        assert!(scatter_svg.contains(palette.color(0).unwrap()));
+        assert!(scatter_svg.contains(palette.color(1).unwrap()));
     }
 
     #[test]

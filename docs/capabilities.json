@@ -207,19 +207,21 @@
     },
     {
       "operation": "line-chart",
-      "description": "Monochrome labeled SVG line chart; accepts legacy x,y or JSON x/y/title/x_axis/y_axis parameters",
+      "description": "Monochrome single-series or licensed qualitative-palette multi-series SVG line chart with legend and redundant marker/dash channels",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux x86_64 vector fixture passed"
+      "fixture_status": "Linux x86_64 single-series and batlowS multi-series vector fixtures passed"
     },
     {
       "operation": "scatter",
-      "description": "Monochrome labeled scatter SVG, 800 x 600; accepts legacy x,y or JSON x/y/title/x_axis/y_axis parameters",
+      "description": "Monochrome single-series or licensed qualitative-palette multi-series scatter SVG with legend and distinct markers",
       "status": "implemented-unverified",
-      "targets": [],
-      "fixture_status": "not run"
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux x86_64 scatter and multi-series line fixtures passed; additional scatter multi-series target fixtures pending"
     },
     {
       "operation": "quantiles",
