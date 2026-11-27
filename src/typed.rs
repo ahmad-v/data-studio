@@ -10,7 +10,7 @@ use parquet::arrow::ArrowWriter;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
-    hash::{Hash, Hasher},
+    hash::{BuildHasher, Hash, Hasher},
     path::Path,
     sync::Arc,
 };
@@ -1499,10 +1499,11 @@ impl TypedTable {
             None => (0..self.columns.len()).collect(),
         };
         let mut buckets = HashMap::<u64, Vec<usize>>::new();
+        let hash_builder = std::collections::hash_map::RandomState::new();
         let mut keep = vec![false; self.rows];
         for row in 0..self.rows {
             job.check()?;
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            let mut hasher = hash_builder.build_hasher();
             for &column_index in &selected {
                 let column = &self.columns[column_index];
                 typed_join_key(column, &column.values[row])?.hash(&mut hasher);

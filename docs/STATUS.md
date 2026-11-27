@@ -16,7 +16,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | filter-number-* | Typed finite numeric comparisons and inclusive range; nulls excluded and unsafe integer precision rejected | Regression route added; hosted verification pending |
 | sort | Stable type-aware ascending sort, nulls last, for CSV/TSV and supported flat Parquet; typed preview and supported output | Regression route added; new hosted verification pending |
 | head-rows / tail-rows / reverse-rows | Typed row selection and ordering for supported CSV/TSV and scalar Parquet | Regression route added; hosted verification pending |
-| deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
+| deduplicate | Keep the first occurrence of each full row; common CSV/TSV/Parquet routes compare typed values and retain nulls | Legacy Linux fixture passed; typed regression added, hosted verification pending |
 | mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
 | inner-join | Bounded exact-text fallback plus typed key matching for CSV/TSV and supported scalar Parquet input, with typed Parquet output | Regression route added; new hosted verification pending |
 | left-join | Left outer join with duplicate-key expansion and blank-key nonmatching | Linux fixture-tested |
@@ -50,7 +50,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | filter-not-contains | Case-sensitive literal substring exclusion | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | head-rows | Keep first N rows in source order | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | tail-rows | Keep last N rows in source order | Linux route and versioned-project fixtures passed; hosted matrix pending |
-| drop-duplicates-by-columns | Keep first exact key occurrence in selected columns | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| drop-duplicates-by-columns | Keep first typed key occurrence in selected columns; null keys compare equal | Legacy Linux route and project fixtures passed; typed regression added, hosted verification pending |
 | add-index-column | Add sequential signed 64-bit row index | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | add-constant-column | Add literal text to every row | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | normalize-text | Trim, Unicode case change, or collapse whitespace | Linux route and versioned-project fixtures passed; hosted matrix pending |
