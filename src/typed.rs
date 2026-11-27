@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     hash::{BuildHasher, Hash, Hasher},
+    io::Cursor,
     path::Path,
     sync::Arc,
 };
@@ -716,8 +717,8 @@ pub(crate) struct TypedTable {
 }
 
 impl TypedTable {
-    /// Load supported delimited inputs directly into typed columns without creating a
-    /// row-oriented text `Table`. Other existing formats use the legacy decoder first.
+    /// Load supported inputs directly into typed columns without creating a
+    /// row-oriented text `Table` where the format exposes native cell values.
     pub(crate) fn from_path(
         path: &Path,
         sheet: Option<&str>,
@@ -740,11 +741,194 @@ impl TypedTable {
                     job,
                 )
             }
+            Some("xlsx") => Self::from_xlsx(path, sheet, request, job),
             _ => {
                 let source = super::load(path, sheet, job)?;
                 Self::infer(&source, request, job)
             }
         }
+    }
+
+    fn from_xlsx(
+        path: &Path,
+        sheet: Option<&str>,
+        request: SchemaRequest,
+        job: &Job,
+    ) -> Result<Self> {
+        use calamine::{Data, Reader, Xlsx};
+
+        let bytes = read_bounded(path, MAX_BYTES)?;
+        job.check()?;
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes.as_slice()))
+            .map_err(|error| Error::input(error.to_string()))?;
+        if zip.len() > 4096 {
+            return Err(Error::input("Workbook archive member limit exceeded"));
+        }
+        let mut total = 0u64;
+        for index in 0..zip.len() {
+            job.check()?;
+            let entry = zip
+                .by_index(index)
+                .map_err(|error| Error::input(error.to_string()))?;
+            total = total
+                .checked_add(entry.size())
+                .ok_or_else(|| Error::input("Workbook expansion overflow"))?;
+            if total > 64 * 1024 * 1024 || entry.size() > 32 * 1024 * 1024 {
+                return Err(Error::input("Workbook declared expansion limit exceeded"));
+            }
+        }
+        drop(zip);
+
+        let mut workbook: Xlsx<_> =
+            calamine::open_workbook_from_rs::<Xlsx<_>, _>(Cursor::new(bytes))
+                .map_err(|error| Error::input(error.to_string()))?;
+        let names = workbook.sheet_names();
+        let name = match sheet {
+            Some(name) if names.iter().any(|candidate| candidate == name) => name,
+            Some(name) => return Err(Error::input(format!("Worksheet not found: {name}"))),
+            None => names
+                .first()
+                .ok_or_else(|| Error::input("Workbook has no worksheets"))?,
+        };
+        let range = workbook
+            .worksheet_range(name)
+            .map_err(|error| Error::input(error.to_string()))?;
+        let (height, width) = range.get_size();
+        if height == 0 || width == 0 || width > MAX_COLS || height.saturating_mul(width) > MAX_CELLS
+        {
+            return Err(Error::input("Worksheet exceeds typed table limits"));
+        }
+        let rows = range.rows().collect::<Vec<_>>();
+        let headers = rows[0].iter().map(ToString::to_string).collect::<Vec<_>>();
+        validate_schema_request(&headers, &request)?;
+
+        let mut inference = vec![TypeInference::default(); width];
+        let mut explicit_empty_text = vec![false; width];
+        for (row_index, row) in rows.iter().enumerate().skip(1) {
+            job.check()?;
+            for (column_index, cell) in row.iter().enumerate() {
+                if let Data::Error(error) = cell {
+                    return Err(Error::input(format!(
+                        "Worksheet cell error at row {}, column {}: {error}",
+                        row_index + 1,
+                        column_index + 1
+                    )));
+                }
+                match cell {
+                    Data::Empty => {}
+                    Data::String(value) if value.is_empty() => {
+                        explicit_empty_text[column_index] = true;
+                    }
+                    Data::Float(value) if !value.is_finite() => {
+                        return Err(Error::input("Worksheet contains a non-finite number"));
+                    }
+                    Data::Float(value) => {
+                        let token = if value.fract() == 0.0 {
+                            format!("{value:.1}")
+                        } else {
+                            value.to_string()
+                        };
+                        inference[column_index].observe(&token);
+                    }
+                    Data::DateTime(value) if value.is_duration() => {
+                        inference[column_index].observe(&value.to_string());
+                    }
+                    Data::DateTime(value) => {
+                        let (year, month, day, hour, minute, second, millis) =
+                            value.to_ymd_hms_milli();
+                        let token = format!(
+                            "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}"
+                        );
+                        inference[column_index].observe(&token);
+                    }
+                    Data::DateTimeIso(value) => inference[column_index].observe(value),
+                    Data::DurationIso(value) | Data::String(value) => {
+                        inference[column_index].observe(value)
+                    }
+                    _ => inference[column_index].observe(&cell.to_string()),
+                }
+            }
+        }
+        let kinds = headers
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                request.overrides.get(name).copied().unwrap_or_else(|| {
+                    if explicit_empty_text[index] {
+                        ColumnType::String
+                    } else {
+                        inference[index].finish()
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut values = (0..width)
+            .map(|_| Vec::with_capacity(height - 1))
+            .collect::<Vec<_>>();
+        let mut raw_text = (0..width)
+            .map(|_| Vec::with_capacity(height - 1))
+            .collect::<Vec<Vec<Option<String>>>>();
+        let mut categories = (0..width).map(|_| Vec::new()).collect::<Vec<_>>();
+        let mut category_ids = (0..width)
+            .map(|_| HashMap::<String, u32>::new())
+            .collect::<Vec<_>>();
+
+        for (row_index, row) in rows.iter().enumerate().skip(1) {
+            job.check()?;
+            for column_index in 0..width {
+                let cell = &row[column_index];
+                let value = xlsx_scalar(
+                    &headers[column_index],
+                    kinds[column_index],
+                    cell,
+                    &mut categories[column_index],
+                    &mut category_ids[column_index],
+                )
+                .map_err(|error| {
+                    Error::input(format!(
+                        "Worksheet row {}, column {:?}: {}",
+                        row_index + 2,
+                        headers[column_index],
+                        error
+                    ))
+                })?;
+                let lexical = match cell {
+                    Data::Empty => String::new(),
+                    Data::String(value) => value.clone(),
+                    Data::DateTime(value) if !value.is_duration() => {
+                        let (y, m, d, h, min, s, ms) = value.to_ymd_hms_milli();
+                        format!("{y:04}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}.{ms:03}")
+                    }
+                    _ => cell.to_string(),
+                };
+                raw_text[column_index].push(
+                    if matches!(cell, Data::String(text) if text.is_empty())
+                        && matches!(value, Scalar::String(_))
+                    {
+                        None
+                    } else {
+                        preserved_raw_text(&lexical, &value)
+                    },
+                );
+                values[column_index].push(value);
+            }
+        }
+        let columns = headers
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| Column {
+                metadata: request.metadata.get(&name).cloned().unwrap_or_default(),
+                name,
+                kind: kinds[index],
+                values: std::mem::take(&mut values[index]),
+                raw_text: std::mem::take(&mut raw_text[index]),
+                categories: std::mem::take(&mut categories[index]),
+            })
+            .collect();
+        Ok(Self {
+            columns,
+            rows: height - 1,
+        })
     }
 
     fn from_delimited_bytes(
@@ -2332,6 +2516,99 @@ fn convert_cell(
     })
 }
 
+fn xlsx_scalar(
+    name: &str,
+    kind: ColumnType,
+    cell: &calamine::Data,
+    categories: &mut Vec<String>,
+    category_ids: &mut HashMap<String, u32>,
+) -> Result<Scalar> {
+    use calamine::Data;
+
+    if matches!(cell, Data::Empty) {
+        return Ok(Scalar::Null);
+    }
+    if let Data::Error(error) = cell {
+        return Err(Error::input(format!("Excel cell error: {error}")));
+    }
+    if let Data::String(value) = cell {
+        if value.is_empty() && matches!(kind, ColumnType::String | ColumnType::Categorical) {
+            if kind == ColumnType::String {
+                return Ok(Scalar::String(String::new()));
+            }
+            let id = if let Some(id) = category_ids.get(value) {
+                *id
+            } else {
+                let id = u32::try_from(categories.len())
+                    .map_err(|_| Error::new(ErrorKind::Limit, "Too many categories"))?;
+                categories.push(value.clone());
+                category_ids.insert(value.clone(), id);
+                id
+            };
+            return Ok(Scalar::Categorical(id));
+        }
+    }
+    let token = match cell {
+        Data::DateTime(value) if value.is_duration() => value.to_string(),
+        Data::DateTime(value) => {
+            let (year, month, day, hour, minute, second, millis) = value.to_ymd_hms_milli();
+            format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}")
+        }
+        Data::DateTimeIso(value) | Data::DurationIso(value) | Data::String(value) => value.clone(),
+        Data::Float(value) if value.fract() == 0.0 => format!("{value:.1}"),
+        _ => cell.to_string(),
+    };
+
+    if let Data::Int(value) = cell {
+        match kind {
+            ColumnType::UInt64 if *value >= 0 => return Ok(Scalar::UInt64(*value as u64)),
+            ColumnType::UInt64 => {
+                return Err(Error::input(format!(
+                    "Column {name:?} contains a negative value"
+                )))
+            }
+            ColumnType::Int64 => return Ok(Scalar::Int64(*value)),
+            ColumnType::Float64 if value.unsigned_abs() <= (1u64 << 53) => {
+                return Ok(Scalar::Float64(*value as f64))
+            }
+            ColumnType::Float64 => {
+                return Err(Error::input(format!(
+                    "Column {name:?} integer cannot be represented exactly as float64"
+                )))
+            }
+            _ => {}
+        }
+    }
+    if let Data::Float(value) = cell {
+        if !value.is_finite() {
+            return Err(Error::input(format!("Column {name:?} is not finite")));
+        }
+        match kind {
+            ColumnType::Float64 => return Ok(Scalar::Float64(*value)),
+            ColumnType::Int64
+                if value.fract() == 0.0
+                    && *value >= i64::MIN as f64
+                    && *value < -(i64::MIN as f64) =>
+            {
+                let integer = *value as i64;
+                if integer as f64 == *value {
+                    return Ok(Scalar::Int64(integer));
+                }
+            }
+            ColumnType::UInt64
+                if value.fract() == 0.0 && *value >= 0.0 && *value < u64::MAX as f64 =>
+            {
+                let integer = *value as u64;
+                if integer as f64 == *value {
+                    return Ok(Scalar::UInt64(integer));
+                }
+            }
+            _ => {}
+        }
+    }
+    convert_cell(name, kind, &token, categories, category_ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2437,6 +2714,36 @@ mod tests {
         let direct = TypedTable::from_path(&input, None, request, &job).unwrap();
         assert_eq!(direct.schema_report(), inferred.schema_report());
         assert_eq!(direct.preview_report(), inferred.preview_report());
+    }
+
+    #[test]
+    fn direct_xlsx_loader_preserves_native_numeric_types_and_sheet_selection() {
+        let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/two-sheets.xlsx");
+        let job = Job::new();
+        let first = TypedTable::from_path(&input, None, SchemaRequest::default(), &job).unwrap();
+        assert_eq!(first.schema_report()["columns"][0]["type"], "string");
+        assert_eq!(first.schema_report()["columns"][1]["type"], "float64");
+        assert_eq!(first.schema_report()["columns"][2]["type"], "float64");
+        assert_eq!(first.preview_report()["preview"][0][1], "1");
+        assert_eq!(first.preview_report()["preview"][1][2], "4");
+
+        let selected =
+            TypedTable::from_path(&input, Some("Second sheet"), SchemaRequest::default(), &job)
+                .unwrap();
+        assert_eq!(selected.schema_report()["columns"][1]["type"], "float64");
+        assert_eq!(selected.preview_report()["preview"][0][1], "42");
+    }
+
+    #[test]
+    fn direct_xlsx_loader_applies_typed_overrides() {
+        let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/table.xlsx");
+        let request =
+            SchemaRequest::from_json(r#"{"overrides":{"x":"float64","group":"categorical"}}"#)
+                .unwrap();
+        let typed = TypedTable::from_path(&input, None, request, &Job::new()).unwrap();
+        assert_eq!(typed.schema_report()["columns"][0]["type"], "categorical");
+        assert_eq!(typed.schema_report()["columns"][1]["type"], "float64");
+        assert_eq!(typed.preview_report()["preview"][0][1], "1");
     }
 
     #[test]
