@@ -31,7 +31,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. CSV, TSV and supported scalar Parquet inputs preserve inferred types in previews and Parquet output; CSV/TSV output serializes nulls as empty fields."},
- Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware comparisons, stable sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), and typed `group-sum`/`group-mean`; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware comparisons, stable sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving `fill-missing`/`fill-forward`/`fill-backward`; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
@@ -1058,6 +1058,9 @@ fn try_typed_basic_operation(
             | "rename-column"
             | "drop-missing"
             | "drop-rows-any-missing"
+            | "fill-missing"
+            | "fill-forward"
+            | "fill-backward"
             | "head-rows"
             | "tail-rows"
             | "reverse-rows"
@@ -1162,6 +1165,9 @@ fn try_typed_basic_operation(
             Step::SelectColumns { columns } => table.select_columns(&columns, job)?,
             Step::RenameColumn { column, name } => table.rename_column(&column, name)?,
             Step::DropMissing { column } => table.drop_missing(&column, job)?,
+            Step::FillMissing { column, value } => table.fill_missing(&column, &value, job)?,
+            Step::FillForward { column } => table.fill_direction(&column, true, job)?,
+            Step::FillBackward { column } => table.fill_direction(&column, false, job)?,
             Step::DropRowsAnyMissing {} => table.drop_rows_any_missing(job)?,
             Step::HeadRows { rows } => table.head_rows(rows, job)?,
             Step::TailRows { rows } => table.tail_rows(rows, job)?,
@@ -1288,7 +1294,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 preview: preview.chars().take(24000).collect(),
                 written,
                 warnings: vec![format!(
-                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed group-sum/group-mean preserve key type and metadata, group null keys together, omit null values and return null for all-missing groups. Typed pipelines support filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows and reverse-rows. Joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
+                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed group-sum/group-mean preserve key type and metadata, group null keys together, omit null values and return null for all-missing groups. Missing-value fills parse replacements against the existing column type and preserve source spellings in previews. Typed pipelines support filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, fill-missing, fill-forward, fill-backward, drop-rows-any-missing, head-rows, tail-rows and reverse-rows. Joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
                 )],
                 ..Outcome::default()
             });
@@ -1881,6 +1887,69 @@ mod tests {
             .downcast_ref::<arrow_array::Int64Array>()
             .unwrap();
         assert_eq!(scores.values(), &[10, 10]);
+    }
+
+    #[test]
+    fn typed_project_fills_missing_values_without_changing_schema_or_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("fill-input.csv");
+        let project_path = dir.path().join("fill-project.json");
+        let output = dir.path().join("filled.parquet");
+        let original = "score,manual\n,alpha\n2,\n, \n4,last\n,\n";
+        std::fs::write(&input, original).unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {"overrides": {"score": "int64"}},
+                "steps": [
+                    {"operation": "fill-forward", "column": "score"},
+                    {"operation": "fill-backward", "column": "score"},
+                    {"operation": "fill-missing", "column": "manual", "value": "replacement"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(0).data_type(), &DataType::Int64);
+        let batch = reader.build().unwrap().next().unwrap().unwrap();
+        let scores = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(scores.values(), &[2, 2, 2, 4, 4]);
+        assert_eq!(scores.null_count(), 0);
+        let labels = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::StringArray>()
+            .unwrap();
+        assert_eq!(
+            labels.iter().collect::<Vec<_>>(),
+            [
+                Some("alpha"),
+                Some("replacement"),
+                Some("replacement"),
+                Some("last"),
+                Some("replacement"),
+            ]
+        );
     }
 
     #[test]

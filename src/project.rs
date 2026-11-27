@@ -353,12 +353,21 @@ impl Project {
                         Step::SelectColumns { columns } => table.select_columns(&columns, job),
                         Step::Sort { column } => table.sort_by(&column, job),
                         Step::DropMissing { column } => table.drop_missing(&column, job),
+                        Step::FillMissing { column, value } => {
+                            table.fill_missing(&column, &value, job)
+                        }
+                        Step::FillForward { column } => {
+                            table.fill_direction(&column, true, job)
+                        }
+                        Step::FillBackward { column } => {
+                            table.fill_direction(&column, false, job)
+                        }
                         Step::DropRowsAnyMissing {} => table.drop_rows_any_missing(job),
                         Step::HeadRows { rows } => table.head_rows(rows, job),
                         Step::TailRows { rows } => table.tail_rows(rows, job),
                         Step::ReverseRows {} => table.reverse_rows(job),
                         _ => Err(Error::input(
-                            "This operation is not supported in a typed pipeline yet; use filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
+                            "This operation is not supported in a typed pipeline yet; use filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, fill-missing, fill-forward, fill-backward, drop-rows-any-missing, head-rows, tail-rows or reverse-rows",
                         )),
                     };
                     result.map(|()| table)

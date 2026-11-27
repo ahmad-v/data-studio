@@ -148,12 +148,12 @@
     },
     {
       "operation": "run-project",
-      "description": "Replay version 1 text projects or typed pipelines with comparisons, text predicates, type-aware deduplication, bounded numeric expressions, schema-preserving rename, type-checked inner joins, typed grouped sum/mean and Arrow-preserving Parquet output",
+      "description": "Replay version 1 text projects or typed pipelines with comparisons, text predicates, type-aware deduplication, bounded numeric expressions, schema-preserving rename, type-checked inner joins, typed grouped sum/mean, type-checked missing-value fills and Arrow-preserving Parquet output",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; typed project fixtures cover delimited columnar import, numeric expressions, text predicates, comparisons, type-aware duplicate removal, null propagation, metadata round-trip, stable sorting, type-preserving rename/join, grouped sum/mean and aggregation overflow; expanded hosted verification pending"
+      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; typed project fixtures cover delimited columnar import, numeric expressions, text predicates, comparisons, type-aware duplicate removal, null propagation, metadata round-trip, stable sorting, type-preserving rename/join, grouped sum/mean and aggregation overflow; new type-preserving missing-value fill tests are pending hosted verification"
     },
     {
       "operation": "select-sql",
@@ -652,21 +652,21 @@
     },
     {
       "operation": "fill-forward",
-      "description": "Fill blanks from the preceding nonblank value in a column",
+      "description": "Fill null cells from the nearest preceding typed value in a typed project, or preceding nonblank text in a legacy operation",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Legacy Linux route fixtures passed; new typed-project scalar preservation tests pending hosted verification"
     },
     {
       "operation": "fill-backward",
-      "description": "Fill blanks from the following nonblank value in a column",
+      "description": "Fill null cells from the nearest following typed value in a typed project, or following nonblank text in a legacy operation",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Legacy Linux route fixtures passed; new typed-project scalar preservation tests pending hosted verification"
     },
     {
       "operation": "drop-empty-columns",

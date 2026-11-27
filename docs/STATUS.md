@@ -5,7 +5,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | Operation | Scope | Status |
 |---|---|---|
 | drop-missing | Drop typed nulls from CSV/TSV and supported scalar Parquet routes | New regression fixture; hosted verification pending |
-| fill-missing | Fill blanks in a selected column | Linux fixture-tested |
+| fill-missing | Fill blanks in a selected column | Legacy route Linux fixture-tested; typed project replacement validates against the existing column type (new targeted tests pending CI) |
 | rename-column | Typed CSV/TSV and supported flat Parquet rename; typed preview, CSV/TSV and Parquet output | Regression route added; new hosted verification pending |
 | select-columns | Typed CSV/TSV and supported flat Parquet selection; typed preview, CSV/TSV and Parquet output | Regression route added; new hosted verification pending |
 | counts | Exact value counts for a column | Linux fixture-tested |
@@ -62,7 +62,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | filter-ends-with | Case-sensitive literal suffix filter | Linux route and project fixtures passed; hosted matrix pending |
 | replace-literal | Bounded non-overlapping literal text replacement | Linux route and project fixtures passed; hosted matrix pending |
 | drop-rows-any-missing | Remove rows with any blank or whitespace-only cell | Linux route and project fixtures passed; hosted matrix pending |
-| fill-forward | Fill blanks from nearest preceding value | Linux route and project fixtures passed; hosted matrix pending |
+| fill-forward | Fill blanks from nearest preceding value | Legacy route and project fixtures passed; typed project implementation preserves scalar type (new tests pending CI) |
 | fill-backward | Fill blanks from nearest following value | Linux route and project fixtures passed; hosted matrix pending |
 | drop-empty-columns | Remove all-blank columns, retaining at least one | Linux route and project fixtures passed; hosted matrix pending |
 | reverse-rows | Reverse table row order | Linux route and project fixtures passed; hosted matrix pending |
