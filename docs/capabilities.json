@@ -11,7 +11,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux integration fixture passed"
+      "fixture_status": "Linux text route fixture passed; added typed Parquet output and preview coverage"
     },
     {
       "operation": "fill-missing",
@@ -24,21 +24,21 @@
     },
     {
       "operation": "rename-column",
-      "description": "Rename a table header",
+      "description": "Rename a table header; typed preview/Parquet route for supported CSV, TSV and flat Parquet input",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux integration fixture passed"
+      "fixture_status": "Linux text route fixture passed; typed Parquet schema-preservation coverage added"
     },
     {
       "operation": "select-columns",
-      "description": "Select and reorder table columns",
+      "description": "Select and reorder columns; typed preview/Parquet route for supported CSV, TSV and flat Parquet input",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux x86_64 fixtures passed"
+      "fixture_status": "Linux x86_64 legacy fixtures passed; typed preview/Parquet selection route covered"
     },
     {
       "operation": "counts",
@@ -56,7 +56,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "not run"
+      "fixture_status": "Legacy exact-text output and typed preview/Parquet equality route fixtures added; hosted verification pending"
     },
     {
       "operation": "inspect-schema",
@@ -78,19 +78,19 @@
     },
     {
       "operation": "filter",
-      "description": "Exact-match filter; CSV or string Parquet",
+      "description": "Exact text filter for text output, with typed equality preview/Parquet route for supported CSV, TSV and flat Parquet input",
       "status": "implemented-unverified",
       "targets": [],
-      "fixture_status": "not run"
+      "fixture_status": "Legacy exact-text output and typed preview/Parquet equality route fixtures added; hosted verification pending"
     },
     {
       "operation": "sort",
-      "description": "Stable ascending text sort by one column",
+      "description": "Stable text sort for text output, with typed ascending preview/Parquet route for supported CSV, TSV and flat Parquet input",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux x86_64 fixtures passed"
+      "fixture_status": "Linux x86_64 text fixtures passed; typed numeric sort and null-last Parquet route covered"
     },
     {
       "operation": "deduplicate",

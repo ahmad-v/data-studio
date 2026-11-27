@@ -19,9 +19,9 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or supported flat scalar Parquet columns as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"inspect-schema",label:"Inspect typed schema",hint:r#"Optional JSON: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates per-column types and missing values without changing source data. Optional new .json report."#},
  Operation{id:"export-typed-parquet",label:"Export typed Parquet",hint:r#"Required JSON schema options: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates primitive types, nulls and categoricals, then writes a new typed .parquet file."#},
- Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv, .tsv or .parquet output."},
- Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Optional new CSV or Parquet output."},
- Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Stable ascending text order. Optional CSV, TSV or Parquet output."},
+ Operation{id:"filter",label:"Filter",hint:"Enter column=value. Preview and new Parquet output use inferred typed equality; CSV/TSV output keeps exact text matching."},
+ Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Preview and Parquet output retain inferred column types; CSV/TSV output keeps the legacy text path."},
+ Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Preview and Parquet output use stable typed order; CSV/TSV output keeps stable text order."},
  Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
  Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
  Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Exact nonblank text keys. Optional new CSV, TSV or Parquet output."#},
@@ -30,7 +30,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"full-join",label:"Full outer join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched rows from both tables; missing-side columns are blank."#},
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
- Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank."},
+ Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. Preview and Parquet output preserve inferred column types; CSV/TSV output keeps the legacy text path."},
  Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware comparisons, stable sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), and typed `group-sum`/`group-mean`; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
@@ -1029,6 +1029,64 @@ fn export(t: &Table, p: &Path, j: &Job) -> Result<()> {
         _ => Err(Error::input("Output must be .csv, .tsv or .parquet")),
     }
 }
+
+fn try_typed_basic_operation(
+    operation: &str,
+    parameter: &str,
+    input: &Path,
+    output: &Path,
+    job: &Job,
+) -> Result<Option<Outcome>> {
+    if !matches!(
+        operation,
+        "filter" | "sort" | "select-columns" | "rename-column"
+    ) {
+        return Ok(None);
+    }
+    let input_kind = input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    if !matches!(input_kind.as_deref(), Some("csv" | "tsv" | "parquet")) {
+        return Ok(None);
+    }
+    let writes_parquet = output
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("parquet"));
+    if !output.as_os_str().is_empty() && !writes_parquet {
+        return Ok(None);
+    }
+    let Some(step) = request_step(operation, parameter)? else {
+        return Ok(None);
+    };
+    let mut table = typed::TypedTable::from_path(
+        input,
+        None,
+        typed::SchemaRequest::default(),
+        job,
+    )?;
+    match step {
+        Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
+        Step::Sort { column } => table.sort_by(&column, job)?,
+        Step::SelectColumns { columns } => table.select_columns(&columns, job)?,
+        Step::RenameColumn { column, name } => table.rename_column(&column, name)?,
+        _ => return Ok(None),
+    }
+    let mut written = None;
+    if writes_parquet {
+        table.write_parquet(output, job)?;
+        written = Some(output.to_path_buf());
+    }
+    let preview = serde_json::to_string_pretty(&table.preview_report())?;
+    Ok(Some(Outcome {
+        preview: preview.chars().take(24000).collect(),
+        written,
+        warnings: vec!["Applied the operation to typed columns. CSV/TSV cells are decoded directly into typed values; blank and whitespace-only values are null. Parquet input uses the existing supported-scalar decoder before type inference, so original dictionary and field metadata are not restored.".into()],
+        ..Outcome::default()
+    }))
+}
+
 pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     let project = if r.operation == "run-project" {
         Some(Project::open(Path::new(&r.parameter))?)
@@ -1051,6 +1109,15 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         return Err(Error::input(
             "Project worksheet selection requires XLSX input",
         ));
+    }
+    if let Some(outcome) = try_typed_basic_operation(
+        &r.operation,
+        &r.parameter,
+        &r.input,
+        &r.output,
+        &j,
+    )? {
+        return Ok(outcome);
     }
     if r.operation == "inspect-schema" {
         let schema_request = typed::SchemaRequest::from_json(&r.parameter)?;
@@ -1970,6 +2037,101 @@ mod tests {
             assert_eq!(aggregate.value(2), expected[2]);
             assert!(aggregate.is_null(3)); // All-missing numeric group remains null.
         }
+    }
+
+    #[test]
+    fn basic_operations_use_typed_columns_for_parquet_and_keep_text_output_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("basic.csv");
+        std::fs::write(&input, "id,score,label\n10,2,b\n2,10,a\n1,10,c\n, ,d\n").unwrap();
+
+        let run = |operation: &str, parameter: &str, output: &Path| {
+            handle(
+                Request {
+                    operation: operation.into(),
+                    input: input.clone(),
+                    output: output.to_path_buf(),
+                    parameter: parameter.into(),
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+            .unwrap()
+        };
+
+        let filtered = dir.path().join("filtered.parquet");
+        let result = run("filter", "score=010", &filtered);
+        assert!(result.preview.contains("\"rows\": 2"));
+        let bytes = localwright_core::read_bounded(&filtered, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        assert_eq!(batch.column(0).as_any().downcast_ref::<arrow_array::Int64Array>().unwrap().values(), &[2, 1]);
+
+        let sorted = dir.path().join("sorted.parquet");
+        run("sort", "id", &sorted);
+        let bytes = localwright_core::read_bounded(&sorted, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(0).data_type(), &DataType::Int64);
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let ids = batch.column(0).as_any().downcast_ref::<arrow_array::Int64Array>().unwrap();
+        assert_eq!(&ids.values()[..3], &[1, 2, 10]);
+        assert!(ids.is_null(3));
+
+        let selected = dir.path().join("selected.parquet");
+        run("select-columns", "score,id", &selected);
+        let bytes = localwright_core::read_bounded(&selected, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(0).name(), "score");
+        assert_eq!(reader.schema().field(1).name(), "id");
+
+        let renamed = dir.path().join("renamed.parquet");
+        run("rename-column", "score=response", &renamed);
+        let bytes = localwright_core::read_bounded(&renamed, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(1).name(), "response");
+        assert_eq!(reader.schema().field(1).data_type(), &DataType::Int64);
+
+        let legacy_output = dir.path().join("legacy.csv");
+        run("filter", "score=010", &legacy_output);
+        assert_eq!(
+            std::fs::read_to_string(legacy_output).unwrap(),
+            "id,score,label\n"
+        );
+    }
+
+    #[test]
+    fn basic_typed_sort_accepts_supported_parquet_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.parquet");
+        let output = dir.path().join("sorted.parquet");
+        let text = validate(
+            vec!["id".into(), "value".into()],
+            vec![vec!["10".into(), "a".into()], vec!["2".into(), "b".into()]],
+        )
+        .unwrap();
+        typed::TypedTable::infer(&text, typed::SchemaRequest::default(), &Job::new())
+            .unwrap()
+            .write_parquet(&source, &Job::new())
+            .unwrap();
+        handle(
+            Request {
+                operation: "sort".into(),
+                input: source,
+                output: output.clone(),
+                parameter: "id".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let ids = batch.column(0).as_any().downcast_ref::<arrow_array::Int64Array>().unwrap();
+        assert_eq!(ids.values(), &[2, 10]);
     }
 
     #[test]

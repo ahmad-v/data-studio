@@ -2,12 +2,12 @@
 
 Development source only. Launch the GUI after compiling. Choose an operation, enter local input path and a new output path where needed, set the parameter as described under the operation selector, then Run. Status and errors are shown below. Cancel requests cooperative cancellation. The draft editor accepts transcript or plain text. Choose a theme to change workbench colors and control borders. UI scale adjusts the controls from 80% to 300% and remembers your appearance choices when you reopen the app. Paths are manually typed in this increment; native dialogs and full accessibility remain pending.
 
-- `select-columns`: Enter exact comma-separated column names in output order. Optionally save to a new CSV or Parquet file. Use the first sheet for XLSX input.
+- `select-columns`: Enter exact comma-separated column names in output order. For CSV, TSV or supported flat Parquet input, preview and Parquet output use typed columns; a CSV/TSV output keeps the original text-table route. Use the first sheet for XLSX input.
 - `counts`: Counts exact cell values, including blank text. The preview reports the 30 most frequent values and the total number of distinct values.
 - `preview`: Preview CSV, XLSX or Parquet as text. For XLSX preview and export, enter the exact worksheet name or leave the parameter blank to use the first sheet.
 - `inspect-schema`: Leave Parameter blank to infer column types, or pass JSON such as `{"overrides":{"score":"float64"},"metadata":{"score":{"label":"Response","unit":"points"}}}`. It reports one type, missing-cell count and example value per column, plus category count for categorical columns. Override types are `boolean`, `int64`, `uint64`, `float64`, `date`, `time`, `datetime`, `categorical`, `string`, or `null`. Null means an empty or whitespace-only cell; strings such as `NA` are ordinary text. Invalid overrides fail without changing the input. An optional `.json` output writes a no-overwrite schema report. This operation builds a temporary typed columnar view; the existing transformations still use text cells.
 - `export-typed-parquet`: Use the same optional schema JSON to validate or override types, then choose a new `.parquet` output. It writes Arrow booleans, signed/unsigned integers, finite floats, dates, nanosecond times and timestamps, UTF-8 strings and dictionary-encoded categorical columns. Empty/whitespace-only values become null. Labels and units are saved as Arrow field metadata. Offset-aware datetimes are normalized to UTC; mixed aware and naive values in one column are rejected. The report preview describes the schema written. The source file remains unchanged.
-- `filter`: Exact-match filter; CSV or string Parquet.
+- `filter`: Enter `column=value`. With CSV, TSV or supported flat Parquet input, preview and Parquet output use the inferred column type, so numeric `010` matches numeric 10 and blank/whitespace values are null. CSV/TSV output retains the legacy exact-text match.
 - `filter-contains` and `filter-not-contains`: JSON parameters name a column and nonempty literal substring. Matching is case-sensitive and does not interpret the search text as a pattern.
 - `head-rows` and `tail-rows`: JSON parameter `{"rows":N}` keeps the first or last N rows, preserving source order. N is limited to 500,000.
 - `drop-duplicates-by-columns`: JSON parameter `{"columns":["email"]}` compares exact cell text in the chosen key columns and keeps the first occurrence.
@@ -29,7 +29,7 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `fill-forward` and `fill-backward`: JSON parameter `{"column":"group"}` fills blanks from the nearest preceding or following nonblank cell. Leading or trailing blanks without a source value remain blank.
 - `drop-empty-columns`: Removes columns that contain only blank or whitespace-only cells. It errors if no nonempty column remains.
 - `reverse-rows`: Reverses row order and preserves headers and cell text.
-- `sort`: Enter the exact column name. Rows with equal values retain their order. Values sort as text, so `10` precedes `2`.
+- `sort`: Enter the exact column name. Preview and Parquet output use stable typed order for CSV, TSV or supported flat Parquet inputs, with nulls last; CSV/TSV output retains the stable text sort where `10` precedes `2`.
 - `deduplicate`: Keep the first occurrence of each full row. Leave the parameter blank. Both operations can preview rows or export to a new CSV, TSV or Parquet file.
 - `mask-column`: Enter the exact column name to replace its nonempty values with `[MASKED]`. Preview the result or export a new CSV, TSV or Parquet file. Review other columns and blank patterns before sharing masked data.
 - `summary`: Numeric column n, missing, mean, sample SD, min/max.
@@ -136,7 +136,7 @@ All numeric routes reject nonfinite or malformed observed values, state their me
 
 - `drop-missing`. Enter the exact column name to remove rows whose selected cell is empty or contains only whitespace.
 - `fill-missing`. Enter `column=value` to replace empty and whitespace-only cells with literal text.
-- `rename-column`. Enter `old=new`. The new name must contain text and be unique.
+- `rename-column`: Enter `old=new`. The new name must contain text and be unique. Preview and Parquet output use typed columns for CSV/TSV/supported flat Parquet input; CSV/TSV output retains the text-table behavior.
 
 All three operations can be used in a project. Use a `column` field and, where applicable, `value` for fill or `name` for rename.
 
