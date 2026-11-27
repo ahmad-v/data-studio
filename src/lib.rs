@@ -32,7 +32,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs preserve inferred types in previews and Parquet output; CSV/TSV output serializes nulls as empty fields."},
- Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware comparisons, stable sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving `fill-missing`/`fill-forward`/`fill-backward`; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Version 1 projects keep their original text behavior unless they include `typed_schema`. Version 2 projects use the typed pipeline with inferred columns by default; optional `typed_schema` provides overrides and metadata. Typed projects support schema-aware comparisons, stable sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving missing-value fills. Typed results are saved to a new .parquet file. Join paths are relative to the project file unless absolute."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
@@ -1400,7 +1400,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         });
     }
     if r.operation == "run-project" {
-        if let Some(schema_request) = project.as_ref().and_then(Project::typed_schema).cloned() {
+        if let Some(schema_request) = project.as_ref().and_then(Project::typed_schema_request) {
             if !r.output.as_os_str().is_empty()
                 && !r
                     .output
@@ -2908,6 +2908,60 @@ mod tests {
             .message
             .contains("require a project with typed_schema"));
         assert!(!output.exists());
+    }
+
+    #[test]
+    fn version_two_projects_infer_typed_schema_without_explicit_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let project_path = dir.path().join("project.json");
+        let output = dir.path().join("result.parquet");
+        std::fs::write(&input, "score,label\n010,a\n2,b\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 2,
+                "steps": [{
+                    "operation": "filter-compare",
+                    "column": "score",
+                    "comparison": "gte",
+                    "value": "10"
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let outcome = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(outcome.written.as_deref(), Some(output.as_path()));
+
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(output).unwrap()).unwrap();
+        assert_eq!(builder.schema().field(0).data_type(), &DataType::Int64);
+        let batches = builder
+            .build()
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(batches[0].num_rows(), 1);
+        assert_eq!(
+            batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow_array::Int64Array>()
+                .unwrap()
+                .value(0),
+            10
+        );
     }
 
     #[test]

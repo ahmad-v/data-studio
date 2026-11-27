@@ -247,7 +247,7 @@ pub enum Step {
 impl Project {
     pub fn open(path: &Path) -> Result<Self> {
         let mut project: Self = serde_json::from_slice(&read_bounded(path, 128 * 1024)?)?;
-        if project.schema_version != 1 {
+        if !matches!(project.schema_version, 1 | 2) {
             return Err(Error::input("Unsupported data project version"));
         }
         if !(1..=32).contains(&project.steps.len()) {
@@ -261,8 +261,15 @@ impl Project {
         Ok(project)
     }
 
-    pub(crate) fn typed_schema(&self) -> Option<&SchemaRequest> {
-        self.typed_schema.as_ref()
+    /// Version 1 projects retain their historical text semantics unless they
+    /// explicitly declare a typed schema. Version 2 projects use inferred typed
+    /// columns by default, with optional overrides and metadata.
+    pub(crate) fn typed_schema_request(&self) -> Option<SchemaRequest> {
+        if self.schema_version >= 2 || self.typed_schema.is_some() {
+            Some(self.typed_schema.clone().unwrap_or_default())
+        } else {
+            None
+        }
     }
 
     pub(super) fn run(self, mut table: Table, job: &Job) -> Result<(Table, usize, bool)> {

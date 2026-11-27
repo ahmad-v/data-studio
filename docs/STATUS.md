@@ -22,7 +22,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | left-join | Left outer join with duplicate-key expansion and blank-key nonmatching | Linux fixture-tested |
 | right-join | Right outer join preserving right input order and every unmatched row | Linux fixture-tested |
 | full-join | Full outer join preserving unmatched rows from both tables | Linux fixture-tested |
-| run-project | Replay text projects unchanged; optional `typed_schema` enables typed comparisons, bounded numeric expressions, rename, type-preserving inner join, typed group sum/mean, sorting, selection and row windows while preserving Parquet schema, nulls, categories and metadata; CSV/TSV inputs parse directly to typed columns | Tests cover comparisons, expression errors, metadata, schema-preserving rename/join/aggregation, null semantics and failure isolation; hosted verification pending |
+| run-project | Version 1 retains text behavior unless `typed_schema` is supplied; version 2 infers typed columns by default. Typed pipelines preserve Parquet schema, nulls, categories and metadata across comparisons, bounded numeric expressions, rename, inner join, group sum/mean, sorting, selection, row windows and missing-value handling | Tests cover comparisons, expression errors, metadata, schema-preserving rename/join/aggregation, null semantics and failure isolation; v2 inference regression added, hosted verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
