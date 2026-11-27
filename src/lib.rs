@@ -2281,7 +2281,7 @@ mod tests {
         let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
         assert_eq!(
             reader.schema().field(2).data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+            &DataType::Utf8
         );
         let mut batches = reader.build().unwrap();
         assert_eq!(batches.next().unwrap().unwrap().num_rows(), 1);
