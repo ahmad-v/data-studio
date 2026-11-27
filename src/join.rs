@@ -7,10 +7,10 @@ const MAX_JOIN_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct JoinRequest {
-    right_path: PathBuf,
-    left_key: String,
-    right_key: String,
+pub(crate) struct JoinRequest {
+    pub(crate) right_path: PathBuf,
+    pub(crate) left_key: String,
+    pub(crate) right_key: String,
 }
 
 #[derive(Clone, Copy)]
