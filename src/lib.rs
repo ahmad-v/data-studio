@@ -1087,11 +1087,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         });
     }
     if r.operation == "run-project" {
-        if let Some(schema_request) = project
-            .as_ref()
-            .and_then(Project::typed_schema)
-            .cloned()
-        {
+        if let Some(schema_request) = project.as_ref().and_then(Project::typed_schema).cloned() {
             if !r.output.as_os_str().is_empty()
                 && !r
                     .output
@@ -1635,10 +1631,10 @@ mod tests {
         assert_eq!(schema.field(0).name(), "id");
         assert_eq!(schema.field(0).data_type(), &DataType::Int64);
         assert_eq!(schema.field(1).data_type(), &DataType::Int64);
-        assert_eq!(schema.field(2).data_type(), &DataType::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(DataType::Utf8)
-        ));
+        assert_eq!(
+            schema.field(2).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
         assert_eq!(schema.field(1).metadata()["localwright.label"], "Response");
         assert_eq!(schema.field(1).metadata()["localwright.unit"], "points");
         let mut batches = reader.build().unwrap();

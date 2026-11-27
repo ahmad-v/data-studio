@@ -175,13 +175,17 @@ fn parse_filter_value(column: &Column, literal: &str) -> Result<Option<Scalar>> 
             Scalar::DateTime(parse_datetime(literal.trim()).ok_or_else(invalid)?)
         }
         ColumnType::Categorical => {
-            let Some(index) = column.categories.iter().position(|category| category == literal)
+            let Some(index) = column
+                .categories
+                .iter()
+                .position(|category| category == literal)
             else {
                 return Ok(None);
             };
-            Scalar::Categorical(u32::try_from(index).map_err(|_| {
-                Error::new(ErrorKind::Limit, "Too many categorical values")
-            })?)
+            Scalar::Categorical(
+                u32::try_from(index)
+                    .map_err(|_| Error::new(ErrorKind::Limit, "Too many categorical values"))?,
+            )
         }
         ColumnType::String => Scalar::String(literal.to_owned()),
     };
@@ -237,9 +241,9 @@ fn compare_scalar(column: &Column, left: &Scalar, right: &Scalar) -> Result<std:
             }
         }
         (Scalar::Date(a), Scalar::Date(b)) => a.days_since_epoch().cmp(&b.days_since_epoch()),
-        (Scalar::Time(a), Scalar::Time(b)) => {
-            a.nanoseconds_since_midnight().cmp(&b.nanoseconds_since_midnight())
-        }
+        (Scalar::Time(a), Scalar::Time(b)) => a
+            .nanoseconds_since_midnight()
+            .cmp(&b.nanoseconds_since_midnight()),
         (Scalar::DateTime(a), Scalar::DateTime(b)) => {
             if a.offset_minutes.is_some() != b.offset_minutes.is_some() {
                 return Err(Error::input(format!(
@@ -250,12 +254,14 @@ fn compare_scalar(column: &Column, left: &Scalar, right: &Scalar) -> Result<std:
             datetime_order_value(*a).cmp(&datetime_order_value(*b))
         }
         (Scalar::Categorical(a), Scalar::Categorical(b)) => {
-            let a = column.categories.get(*a as usize).ok_or_else(|| {
-                Error::input("Typed categorical index is outside its dictionary")
-            })?;
-            let b = column.categories.get(*b as usize).ok_or_else(|| {
-                Error::input("Typed categorical index is outside its dictionary")
-            })?;
+            let a = column
+                .categories
+                .get(*a as usize)
+                .ok_or_else(|| Error::input("Typed categorical index is outside its dictionary"))?;
+            let b = column
+                .categories
+                .get(*b as usize)
+                .ok_or_else(|| Error::input("Typed categorical index is outside its dictionary"))?;
             a.cmp(b)
         }
         (Scalar::String(a), Scalar::String(b)) => a.cmp(b),
@@ -489,9 +495,11 @@ impl TypedTable {
             let mut reordered = Vec::with_capacity(order.len());
             for index in order {
                 job.check()?;
-                reordered.push(slots[*index].take().ok_or_else(|| {
-                    Error::input("Typed row order contains a duplicate index")
-                })?);
+                reordered.push(
+                    slots[*index].take().ok_or_else(|| {
+                        Error::input("Typed row order contains a duplicate index")
+                    })?,
+                );
             }
             column.values = reordered;
         }

@@ -255,11 +255,7 @@ impl Project {
         Ok((table, count, masked))
     }
 
-    pub(super) fn run_typed(
-        self,
-        mut table: TypedTable,
-        job: &Job,
-    ) -> Result<(TypedTable, usize)> {
+    pub(super) fn run_typed(self, mut table: TypedTable, job: &Job) -> Result<(TypedTable, usize)> {
         let count = self.steps.len();
         for (index, step) in self.steps.into_iter().enumerate() {
             job.check()?;
