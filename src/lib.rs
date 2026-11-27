@@ -1111,6 +1111,10 @@ fn try_typed_basic_operation(
             | "sort"
             | "select-columns"
             | "rename-column"
+            | "rename-columns"
+            | "drop-columns"
+            | "add-index-column"
+            | "add-constant-column"
             | "drop-missing"
             | "drop-rows-any-missing"
             | "fill-missing"
@@ -1222,6 +1226,14 @@ fn try_typed_basic_operation(
             Step::Sort { column } => table.sort_by(&column, job)?,
             Step::SelectColumns { columns } => table.select_columns(&columns, job)?,
             Step::RenameColumn { column, name } => table.rename_column(&column, name)?,
+            Step::RenameColumns { mapping } => table.rename_columns(&mapping)?,
+            Step::DropColumns { columns } => table.drop_columns(&columns, job)?,
+            Step::AddIndexColumn { name, start } => table.add_index_column(name, start, job)?,
+            Step::AddConstantColumn {
+                name,
+                value,
+                value_type,
+            } => table.add_constant_column(name, &value, value_type, job)?,
             Step::DropMissing { column } => table.drop_missing(&column, job)?,
             Step::FillMissing { column, value } => table.fill_missing(&column, &value, job)?,
             Step::FillForward { column } => table.fill_direction(&column, true, job)?,

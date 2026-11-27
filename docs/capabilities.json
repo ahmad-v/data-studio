@@ -448,21 +448,21 @@
     },
     {
       "operation": "add-index-column",
-      "description": "Add sequential signed 64-bit row indices",
+      "description": "Add sequential signed 64-bit row indices; typed supported file inputs preserve existing column types and Parquet emits integer indices",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed versioned-project and standalone multi-operation Parquet round-trip fixtures added; hosted matrix pending"
     },
     {
       "operation": "add-constant-column",
-      "description": "Add a literal constant column; version 2 typed projects support explicit scalar type override",
+      "description": "Add a literal constant column with inferred or explicit scalar type; typed supported file inputs preserve existing columns",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed versioned-project and standalone multi-operation Parquet round-trip fixtures added; hosted matrix pending"
     },
     {
       "operation": "normalize-text",
@@ -475,21 +475,21 @@
     },
     {
       "operation": "rename-columns",
-      "description": "Atomically rename multiple table columns while preserving typed schema in version 2 projects",
+      "description": "Atomically rename multiple table columns while preserving types for typed supported file inputs and version 2 projects",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed versioned-project and standalone multi-operation Parquet round-trip fixtures added; hosted matrix pending"
     },
     {
       "operation": "drop-columns",
-      "description": "Remove selected columns while retaining at least one column and preserving typed schema in version 2 projects",
+      "description": "Remove selected columns while retaining at least one column and preserving remaining types for typed supported file inputs and version 2 projects",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Typed versioned-project and standalone multi-operation Parquet round-trip fixtures added; hosted matrix pending"
     },
     {
       "operation": "filter-not-equal",
