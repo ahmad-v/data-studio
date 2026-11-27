@@ -2435,7 +2435,12 @@ mod tests {
         };
         let mut typed = TypedTable::infer(&source, request, &Job::new()).unwrap();
         typed
-            .filter_text("group", "NORTH", TextMatch::ContainsInsensitive, &Job::new())
+            .filter_text(
+                "group",
+                "NORTH",
+                TextMatch::ContainsInsensitive,
+                &Job::new(),
+            )
             .unwrap();
         assert_eq!(typed.rows, 1);
         assert_eq!(typed.columns[0].kind, ColumnType::Categorical);

@@ -2008,7 +2008,10 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
         let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
         let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
-        assert!(matches!(reader.schema().field(0).data_type(), DataType::Dictionary(_, _)));
+        assert!(matches!(
+            reader.schema().field(0).data_type(),
+            DataType::Dictionary(_, _)
+        ));
         let mut batches = reader.build().unwrap();
         let batch = batches.next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 1);
