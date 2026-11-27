@@ -1507,21 +1507,31 @@ impl TypedTable {
             .map(|row| {
                 self.columns
                     .iter()
-                    .map(|column| {
-                        (
-                            column.name.clone(),
-                            value_json(&column.values[row], &column.categories)
-                                .unwrap_or(serde_json::Value::Null),
-                        )
+                    .map(|column| match &column.values[row] {
+                        Scalar::String(value) => column.raw_text[row]
+                            .as_ref()
+                            .unwrap_or(value)
+                            .clone(),
+                        Scalar::Categorical(index) => column
+                            .raw_text[row]
+                            .as_ref()
+                            .or_else(|| column.categories.get(*index as usize))
+                            .cloned()
+                            .unwrap_or_default(),
+                        value => scalar_text(
+                            value,
+                            &column.categories,
+                            column.raw_text[row].as_deref(),
+                        ),
                     })
-                    .collect::<serde_json::Map<_, _>>()
+                    .collect::<Vec<_>>()
             })
-            .map(serde_json::Value::Object)
             .collect::<Vec<_>>();
         serde_json::json!({
-            "schema": self.schema_report(),
             "rows": self.rows,
+            "headers": self.columns.iter().map(|column| &column.name).collect::<Vec<_>>(),
             "preview": preview,
+            "schema": self.schema_report(),
         })
     }
 
