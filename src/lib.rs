@@ -1194,6 +1194,59 @@ fn try_typed_basic_operation(
     }))
 }
 
+fn try_typed_numeric_statistic(
+    operation: &str,
+    parameter: &str,
+    input: &Path,
+    output: &Path,
+    job: &Job,
+) -> Result<Option<Outcome>> {
+    if !matches!(
+        operation,
+        "quantiles" | "standard-error" | "mean-ci" | "bootstrap-mean-ci" | "bootstrap-median-ci"
+    ) {
+        return Ok(None);
+    }
+    let input_kind = input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    if !matches!(input_kind.as_deref(), Some("csv" | "tsv" | "parquet")) {
+        return Ok(None);
+    }
+    if !output.as_os_str().is_empty()
+        && !output
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        return Err(Error::input("Statistical reports require a .json output"));
+    }
+    let table = typed::TypedTable::from_path(input, None, typed::SchemaRequest::default(), job)?;
+    let values = table.numeric_values(parameter, job)?;
+    let report = match operation {
+        "quantiles" => statistics::quantiles(&values),
+        "standard-error" => statistics::standard_error(&values),
+        "mean-ci" => statistics::mean_confidence_interval(&values),
+        "bootstrap-mean-ci" => statistics::bootstrap_mean_interval(&values, job),
+        _ => statistics::bootstrap_median_interval(&values, job),
+    }?;
+    let text = serde_json::to_string_pretty(&report)?;
+    let written = if output.as_os_str().is_empty() {
+        None
+    } else {
+        job.check()?;
+        write_bytes(output, text.as_bytes())?;
+        Some(output.to_path_buf())
+    };
+    Ok(Some(Outcome {
+        preview: text,
+        written,
+        warnings: vec!["Statistics read typed numeric columns directly; null values are excluded. Integer values outside the exact f64 range are rejected to prevent silent precision loss. The source data is unchanged.".into()],
+        ..Outcome::default()
+    }))
+}
+
 pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     let project = if r.operation == "run-project" {
         Some(Project::open(Path::new(&r.parameter))?)
@@ -1216,6 +1269,11 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         return Err(Error::input(
             "Project worksheet selection requires XLSX input",
         ));
+    }
+    if let Some(outcome) =
+        try_typed_numeric_statistic(&r.operation, &r.parameter, &r.input, &r.output, &j)?
+    {
+        return Ok(outcome);
     }
     if let Some(outcome) =
         try_typed_basic_operation(&r.operation, &r.parameter, &r.input, &r.output, &j)?
@@ -2407,6 +2465,45 @@ mod tests {
             std::fs::read_to_string(delimited_output).unwrap(),
             "id,score,label\n2,10,a\n1,10,c\n"
         );
+    }
+
+    #[test]
+    fn typed_statistics_exclude_nulls_and_reject_lossy_integer_conversion() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("observations.csv");
+        let report = directory.path().join("quantiles.json");
+        let original = "score,label\n1,a\n2,b\n\"\",c\n3,d\n";
+        std::fs::write(&input, original).unwrap();
+
+        let outcome = handle(
+            Request {
+                operation: "quantiles".into(),
+                input: input.clone(),
+                output: report.clone(),
+                parameter: "score".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+        assert_eq!(value["n"], 3);
+        assert_eq!(value["median"], 2.0);
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(report).unwrap(), outcome.preview);
+
+        let lossy = directory.path().join("lossy.csv");
+        std::fs::write(&lossy, "score\n9007199254740993\n").unwrap();
+        assert!(handle(
+            Request {
+                operation: "standard-error".into(),
+                input: lossy,
+                parameter: "score".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .is_err());
     }
 
     #[test]

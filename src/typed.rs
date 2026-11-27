@@ -1510,6 +1510,39 @@ impl TypedTable {
         Ok(())
     }
 
+    /// Extract finite numeric observations for statistics while preserving null
+    /// semantics. Integer-to-float conversion is limited to the exact f64 range
+    /// so statistics never silently merge distinct large integer values.
+    pub(crate) fn numeric_values(&self, name: &str, job: &Job) -> Result<Vec<f64>> {
+        const MAX_EXACT_INTEGER: u64 = 9_007_199_254_740_992;
+        let index = self.column_index(name)?;
+        let column = &self.columns[index];
+        let mut values = Vec::with_capacity(self.rows);
+        for value in &column.values {
+            job.check()?;
+            let number = match value {
+                Scalar::Null => continue,
+                Scalar::Int64(value) if value.unsigned_abs() <= MAX_EXACT_INTEGER => *value as f64,
+                Scalar::UInt64(value) if *value <= MAX_EXACT_INTEGER => *value as f64,
+                Scalar::Float64(value) if value.is_finite() => *value,
+                Scalar::Int64(_) | Scalar::UInt64(_) => {
+                    return Err(Error::input(format!(
+                        "Column {:?} contains integers outside the exact f64 range",
+                        column.name
+                    )))
+                }
+                _ => {
+                    return Err(Error::input(format!(
+                        "Column {:?} must have a numeric type",
+                        column.name
+                    )))
+                }
+            };
+            values.push(number);
+        }
+        Ok(values)
+    }
+
     pub(crate) fn drop_rows_any_missing(&mut self, job: &Job) -> Result<()> {
         let mut keep = vec![true; self.rows];
         for column in &self.columns {

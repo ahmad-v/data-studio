@@ -120,6 +120,8 @@ The bundled engine uses an in-memory database and limits statement size, output 
 
 ## Inferential statistics and intervals
 
+The single-column `quantiles`, `standard-error`, `mean-ci`, `bootstrap-mean-ci` and `bootstrap-median-ci` operations accept CSV, TSV and supported scalar Parquet columns through the typed data reader. Blank and whitespace-only values are null and excluded. Integer inputs above the exact IEEE-754 `f64` integer range are rejected instead of being rounded silently. This typed route keeps the source unchanged; XLSX statistical operations continue through the existing workbook reader.
+
 - `quantiles` reports Q1, median, Q3 and IQR using Hyndman-Fan type 7 linear interpolation.
 - `standard-error` reports sample SD divided by the square root of n. At least two finite observations are required.
 - `mean-ci` reports a two-sided 95% Student-t interval. It assumes independent observations and uses the sample variance.
