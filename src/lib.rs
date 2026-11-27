@@ -1046,6 +1046,11 @@ fn try_typed_basic_operation(
             | "filter-number-less"
             | "filter-number-less-equal"
             | "filter-number-between"
+            | "filter-contains"
+            | "filter-not-contains"
+            | "filter-contains-insensitive"
+            | "filter-starts-with"
+            | "filter-ends-with"
             | "sort"
             | "select-columns"
             | "rename-column"
@@ -1106,6 +1111,24 @@ fn try_typed_basic_operation(
     } else {
         match step.expect("non-join operations have a parsed typed step") {
             Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
+            Step::FilterContains { column, value } => {
+                table.filter_text(&column, &value, typed::TextMatch::Contains, job)?
+            }
+            Step::FilterNotContains { column, value } => {
+                table.filter_text(&column, &value, typed::TextMatch::NotContains, job)?
+            }
+            Step::FilterContainsInsensitive { column, value } => table.filter_text(
+                &column,
+                &value,
+                typed::TextMatch::ContainsInsensitive,
+                job,
+            )?,
+            Step::FilterStartsWith { column, value } => {
+                table.filter_text(&column, &value, typed::TextMatch::StartsWith, job)?
+            }
+            Step::FilterEndsWith { column, value } => {
+                table.filter_text(&column, &value, typed::TextMatch::EndsWith, job)?
+            }
             Step::FilterNotEqual { column, value } => {
                 table.filter_compare(&column, typed::TypedComparison::Ne, &value, job)?
             }
@@ -2244,6 +2267,22 @@ mod tests {
                 .values(),
             &[2, 1]
         );
+
+        let text_filtered = dir.path().join("text-filtered.parquet");
+        run(
+            "filter-contains-insensitive",
+            r#"{"column":"label","value":"A"}"#,
+            &text_filtered,
+        );
+        let bytes =
+            localwright_core::read_bounded(&text_filtered, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(
+            reader.schema().field(2).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
+        let mut batches = reader.build().unwrap();
+        assert_eq!(batches.next().unwrap().unwrap().num_rows(), 1);
 
         let sorted = dir.path().join("sorted.parquet");
         run("sort", "id", &sorted);
