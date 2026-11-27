@@ -1051,6 +1051,8 @@ fn try_typed_basic_operation(
             | "filter-contains-insensitive"
             | "filter-starts-with"
             | "filter-ends-with"
+            | "deduplicate"
+            | "drop-duplicates-by-columns"
             | "sort"
             | "select-columns"
             | "rename-column"
@@ -1125,6 +1127,10 @@ fn try_typed_basic_operation(
             }
             Step::FilterEndsWith { column, value } => {
                 table.filter_text(&column, &value, typed::TextMatch::EndsWith, job)?
+            }
+            Step::Deduplicate {} => table.deduplicate_rows(None, job)?,
+            Step::DropDuplicatesByColumns { columns } => {
+                table.deduplicate_rows(Some(&columns), job)?
             }
             Step::FilterNotEqual { column, value } => {
                 table.filter_compare(&column, typed::TypedComparison::Ne, &value, job)?
@@ -2279,6 +2285,26 @@ mod tests {
         );
         let mut batches = reader.build().unwrap();
         assert_eq!(batches.next().unwrap().unwrap().num_rows(), 1);
+
+        let unique = dir.path().join("unique-by-score.parquet");
+        run(
+            "drop-duplicates-by-columns",
+            r#"{"columns":["score"]}"#,
+            &unique,
+        );
+        let bytes = localwright_core::read_bounded(&unique, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(ids.value(0), 10);
+        assert_eq!(ids.value(1), 2);
+        assert!(ids.is_null(2));
 
         let sorted = dir.path().join("sorted.parquet");
         run("sort", "id", &sorted);

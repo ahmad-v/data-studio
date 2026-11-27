@@ -10,6 +10,7 @@ use parquet::arrow::ArrowWriter;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
+    hash::{Hash, Hasher},
     path::Path,
     sync::Arc,
 };
@@ -1477,6 +1478,55 @@ impl TypedTable {
         self.reorder_rows(&(0..self.rows).rev().collect::<Vec<_>>(), job)
     }
 
+    /// Keep the first occurrence of each typed key. Nulls compare equal for
+    /// deduplication; categorical values compare by label, not dictionary id.
+    pub(crate) fn deduplicate_rows(
+        &mut self,
+        names: Option<&[String]>,
+        job: &Job,
+    ) -> Result<()> {
+        let selected = match names {
+            Some(names) if names.is_empty() => {
+                return Err(Error::input("Select at least one duplicate key column"));
+            }
+            Some(names) => {
+                let mut indexes = Vec::with_capacity(names.len());
+                for name in names {
+                    let index = self.column_index(name)?;
+                    if indexes.contains(&index) {
+                        return Err(Error::input("A duplicate key column was selected twice"));
+                    }
+                    indexes.push(index);
+                }
+                indexes
+            }
+            None => (0..self.columns.len()).collect(),
+        };
+        let mut buckets = HashMap::<u64, Vec<usize>>::new();
+        let mut keep = vec![false; self.rows];
+        for row in 0..self.rows {
+            job.check()?;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for &column_index in &selected {
+                let column = &self.columns[column_index];
+                typed_join_key(column, &column.values[row])?.hash(&mut hasher);
+            }
+            let hash = hasher.finish();
+            let candidates = buckets.entry(hash).or_default();
+            let duplicate = candidates.iter().copied().any(|candidate| {
+                selected.iter().all(|&column_index| {
+                    self.columns[column_index].values[row]
+                        == self.columns[column_index].values[candidate]
+                })
+            });
+            if !duplicate {
+                keep[row] = true;
+                candidates.push(row);
+            }
+        }
+        self.retain_rows(&keep, job)
+    }
+
     fn column_index(&self, name: &str) -> Result<usize> {
         self.columns
             .iter()
@@ -2447,6 +2497,30 @@ mod tests {
         assert_eq!(typed.columns[0].categories[0], "North");
         assert_eq!(typed.columns[0].values, [Scalar::Categorical(0)]);
         assert_eq!(typed.columns[1].values, [Scalar::Int64(1)]);
+    }
+
+    #[test]
+    fn typed_deduplication_uses_types_nulls_and_first_row_order() {
+        let source = table(
+            vec!["key", "label"],
+            vec![
+                vec!["010", "first"],
+                vec!["10", "second"],
+                vec!["", "missing"],
+                vec![" ", "another missing"],
+            ],
+        );
+        let mut typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
+        typed
+            .deduplicate_rows(Some(&["key".into()]), &Job::new())
+            .unwrap();
+        assert_eq!(typed.rows, 2);
+        assert_eq!(typed.columns[0].values, [Scalar::Int64(10), Scalar::Null]);
+        assert_eq!(typed.columns[1].values[0], Scalar::String("first".into()));
+        assert_eq!(
+            typed.columns[1].values[1],
+            Scalar::String("missing".into())
+        );
     }
 
     #[test]

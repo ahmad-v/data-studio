@@ -10,7 +10,7 @@ Development source only. Launch the GUI after compiling. Choose an operation, se
 - `filter`: Enter `column=value`. With CSV, TSV or supported flat Parquet input, previews and supported outputs use the inferred column type, so numeric `010` matches numeric 10 and blank/whitespace values are null. Delimited output preserves original spellings for retained rows, including leading zeroes; true nulls serialize as empty fields and cannot be distinguished from empty strings on reimport.
 - `filter-contains` and `filter-not-contains`: JSON parameters name a column and nonempty literal substring. Matching is case-sensitive and does not interpret the search text as a pattern. CSV, TSV and supported scalar Parquet inputs use the typed route, which preserves the column's type and nulls for retained records.
 - `head-rows` and `tail-rows`: JSON parameter `{"rows":N}` keeps the first or last N rows, preserving source order. N is limited to 500,000.
-- `drop-duplicates-by-columns`: JSON parameter `{"columns":["email"]}` compares exact cell text in the chosen key columns and keeps the first occurrence.
+- `drop-duplicates-by-columns`: JSON parameter `{"columns":["email"]}` keeps the first occurrence. CSV, TSV and supported scalar Parquet inputs compare typed values, treating null keys as equal while preserving the original values and schema.
 - `add-index-column`: JSON parameter `{"name":"row_number","start":1}` adds sequential signed 64-bit values in current row order and rejects overflow.
 - `add-constant-column`: JSON parameter `{"name":"cohort","value":"pilot"}` copies the literal value into a new column.
 - `normalize-text`: JSON parameter `{"column":"name","mode":"trim"}` supports `trim`, Unicode lowercase, Unicode uppercase, and `collapse-whitespace` (Unicode whitespace collapsed to one ASCII space).
@@ -30,7 +30,7 @@ Development source only. Launch the GUI after compiling. Choose an operation, se
 - `drop-empty-columns`: Removes columns that contain only blank or whitespace-only cells. It errors if no nonempty column remains.
 - `reverse-rows`: Reverses row order and preserves headers and cell text.
 - `sort`: Enter the exact column name. CSV, TSV and supported flat Parquet inputs use stable typed order for previews and supported outputs, with nulls last.
-- `deduplicate`: Keep the first occurrence of each full row. Leave the parameter blank. Both operations can preview rows or export to a new CSV, TSV or Parquet file.
+- `deduplicate`: Keep the first occurrence of each full row. Leave the parameter blank. Both operations can preview rows or export to a new CSV, TSV or Parquet file. CSV, TSV and supported scalar Parquet inputs use type-aware equality and keep nulls distinct from non-null values.
 - `mask-column`: Enter the exact column name to replace its nonempty values with `[MASKED]`. Preview the result or export a new CSV, TSV or Parquet file. Review other columns and blank patterns before sharing masked data.
 - `summary`: Numeric column n, missing, mean, sample SD, min/max.
 - Statistical reports can optionally be saved to a new `.json` output. They do not alter the input table.

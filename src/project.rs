@@ -324,6 +324,10 @@ impl Project {
                         Step::FilterEndsWith { column, value } => {
                             table.filter_text(&column, &value, TextMatch::EndsWith, job)
                         }
+                        Step::Deduplicate {} => table.deduplicate_rows(None, job),
+                        Step::DropDuplicatesByColumns { columns } => {
+                            table.deduplicate_rows(Some(&columns), job)
+                        }
                         Step::DeriveNumericColumn {
                             name,
                             expression,
