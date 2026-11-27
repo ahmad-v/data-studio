@@ -14,14 +14,73 @@ pub struct Project {
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Step {
-    Filter { column: String, value: String },
-    SelectColumns { columns: Vec<String> },
-    Sort { column: String },
+    Filter {
+        column: String,
+        value: String,
+    },
+    SelectColumns {
+        columns: Vec<String>,
+    },
+    Sort {
+        column: String,
+    },
     Deduplicate {},
-    MaskColumn { column: String },
-    DropMissing { column: String },
-    FillMissing { column: String, value: String },
-    RenameColumn { column: String, name: String },
+    MaskColumn {
+        column: String,
+    },
+    DropMissing {
+        column: String,
+    },
+    FillMissing {
+        column: String,
+        value: String,
+    },
+    RenameColumn {
+        column: String,
+        name: String,
+    },
+    RecodeValues {
+        column: String,
+        mapping: std::collections::BTreeMap<String, String>,
+    },
+    ConvertNumber {
+        column: String,
+    },
+    ConvertInteger {
+        column: String,
+    },
+    ConvertBoolean {
+        column: String,
+    },
+    SplitColumn {
+        column: String,
+        delimiter: String,
+        new_columns: Vec<String>,
+    },
+    MergeColumns {
+        columns: Vec<String>,
+        name: String,
+        delimiter: String,
+    },
+    Pivot {
+        id_column: String,
+        pivot_column: String,
+        value_column: String,
+    },
+    Unpivot {
+        id_columns: Vec<String>,
+        value_columns: Vec<String>,
+        variable_name: String,
+        value_name: String,
+    },
+    GroupSum {
+        group_column: String,
+        value_column: String,
+    },
+    GroupMean {
+        group_column: String,
+        value_column: String,
+    },
 }
 
 impl Project {

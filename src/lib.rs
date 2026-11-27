@@ -3,6 +3,7 @@ mod join;
 mod project;
 mod sql;
 mod statistics;
+mod transform;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx};
@@ -42,23 +43,33 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"one-way-anova",label:"One-way ANOVA",hint:"Enter group-column,value-column. Blank group/value rows excluded; at least two groups and positive within-group degrees of freedom required."},
  Operation{id:"spearman",label:"Spearman rank correlation",hint:"Enter x-column,y-column. Complete numeric pairs only; average ranks for ties and approximate p value."},
  Operation{id:"correlation-interval",label:"Pearson correlation interval",hint:"Enter x-column,y-column. Reports a two-sided 95% Fisher-z interval for n > 3 and |r| < 1."},
+ Operation{id:"recode-values",label:"Recode exact values",hint:r#"Parameter JSON: {"column":"status","mapping":{"old":"new"}}. Unlisted values remain unchanged."#},
+ Operation{id:"convert-number",label:"Convert to numeric text",hint:r#"Parameter JSON: {"column":"amount"}. Validates finite numbers and normalizes their text; blanks remain blank."#},
+ Operation{id:"convert-integer",label:"Convert to integer text",hint:r#"Parameter JSON: {"column":"count"}. Requires exact signed 64-bit whole numbers; blanks remain blank."#},
+ Operation{id:"convert-boolean",label:"Convert to boolean text",hint:r#"Parameter JSON: {"column":"active"}. Accepts true/false, yes/no or 1/0 and writes true/false."#},
+ Operation{id:"split-column",label:"Split a column",hint:r#"Parameter JSON: {"column":"name","delimiter":" ","new_columns":["first","last"]}. Every nonblank row must split into exactly the declared parts."#},
+ Operation{id:"merge-columns",label:"Merge columns",hint:r#"Parameter JSON: {"columns":["first","last"],"name":"full","delimiter":" "}. Source columns remain unchanged."#},
+ Operation{id:"pivot",label:"Pivot long to wide",hint:r#"Parameter JSON: {"id_column":"id","pivot_column":"year","value_column":"value"}. Duplicate id/category pairs are rejected."#},
+ Operation{id:"unpivot",label:"Unpivot wide to long",hint:r#"Parameter JSON: {"id_columns":["id"],"value_columns":["2024","2025"],"variable_name":"year","value_name":"value"}."#},
+ Operation{id:"group-sum",label:"Group and sum",hint:r#"Parameter JSON: {"group_column":"site","value_column":"count"}. Blank numeric cells are excluded; exact text groups retained."#},
+ Operation{id:"group-mean",label:"Group and average",hint:r#"Parameter JSON: {"group_column":"site","value_column":"score"}. Blank numeric cells are excluded; exact text groups retained."#},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
  Operation{id:"line-chart",label:"Line chart SVG",hint:"Enter x-column,y-column. Complete numeric rows connect in table order. Choose a new .svg file."},
  Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
  Operation{id:"export",label:"Export",hint:"Export to .csv, .tsv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
-struct Table {
-    headers: Vec<String>,
-    rows: Vec<Vec<String>>,
+pub(crate) struct Table {
+    pub(crate) headers: Vec<String>,
+    pub(crate) rows: Vec<Vec<String>>,
 }
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_CELLS: usize = 500_000;
-const MAX_COLS: usize = 256;
+pub(crate) const MAX_CELLS: usize = 500_000;
+pub(crate) const MAX_COLS: usize = 256;
 fn err(e: impl std::fmt::Display) -> Error {
     Error::input(e.to_string())
 }
-fn validate(headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<Table> {
+pub(crate) fn validate(headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<Table> {
     let mut seen = std::collections::HashSet::new();
     if headers.is_empty()
         || headers.len() > MAX_COLS
@@ -251,7 +262,7 @@ fn load(p: &Path, sheet: Option<&str>, j: &Job) -> Result<Table> {
         _ => Err(Error::input("Expected CSV, TSV, XLSX or Parquet")),
     }
 }
-fn column(t: &Table, name: &str) -> Result<usize> {
+pub(crate) fn column(t: &Table, name: &str) -> Result<usize> {
     t.headers
         .iter()
         .position(|h| h == name)
@@ -305,6 +316,16 @@ const MASK_WARNING: &str = "Only selected columns' nonempty text cells were mask
 
 fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
     match step {
+        step @ (Step::RecodeValues { .. }
+        | Step::ConvertNumber { .. }
+        | Step::ConvertInteger { .. }
+        | Step::ConvertBoolean { .. }
+        | Step::SplitColumn { .. }
+        | Step::MergeColumns { .. }
+        | Step::Pivot { .. }
+        | Step::Unpivot { .. }
+        | Step::GroupSum { .. }
+        | Step::GroupMean { .. }) => return transform::apply(table, step, job),
         Step::SelectColumns { columns } => {
             return select_columns(table, columns.iter().map(String::as_str), job)
         }
@@ -395,6 +416,21 @@ fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
 }
 
 fn request_step(operation: &str, parameter: &str) -> Result<Option<Step>> {
+    if matches!(
+        operation,
+        "recode-values"
+            | "convert-number"
+            | "convert-integer"
+            | "convert-boolean"
+            | "split-column"
+            | "merge-columns"
+            | "pivot"
+            | "unpivot"
+            | "group-sum"
+            | "group-mean"
+    ) {
+        return transform::parse_step(operation, parameter).map(Some);
+    }
     let step = match operation {
         "select-columns" => Step::SelectColumns {
             columns: parameter.split(',').map(str::to_owned).collect(),
@@ -937,7 +973,9 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate"
         | "mask-column" | "run-project" | "inner-join" | "left-join" | "right-join"
         | "full-join" | "group-summary" | "select-sql" | "drop-missing" | "fill-missing"
-        | "rename-column" => {
+        | "rename-column" | "recode-values" | "convert-number" | "convert-integer"
+        | "convert-boolean" | "split-column" | "merge-columns" | "pivot" | "unpivot"
+        | "group-sum" | "group-mean" => {
             if let Some(project) = project {
                 let (result, steps, masked) = project.run(t, &j)?;
                 t = result;
