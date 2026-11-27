@@ -80,6 +80,15 @@ pub(crate) enum TypedComparison {
     Gte,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TextMatch {
+    Contains,
+    NotContains,
+    ContainsInsensitive,
+    StartsWith,
+    EndsWith,
+}
+
 /// Bounded, declarative arithmetic expression used by typed project pipelines.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -883,6 +892,55 @@ impl TypedTable {
     /// Keep rows whose selected cell equals a literal parsed using that column's type.
     pub(crate) fn filter_equal(&mut self, name: &str, literal: &str, job: &Job) -> Result<()> {
         self.filter_compare(name, TypedComparison::Eq, literal, job)
+    }
+
+    /// Filter a typed column using a case-sensitive or insensitive text predicate.
+    /// Values are formatted only for matching; the retained scalar values and schema
+    /// remain typed and unchanged.
+    pub(crate) fn filter_text(
+        &mut self,
+        name: &str,
+        needle: &str,
+        mode: TextMatch,
+        job: &Job,
+    ) -> Result<()> {
+        if needle.is_empty() {
+            return Err(Error::input("Text filter value must not be empty"));
+        }
+        if needle.len() > MAX_EXAMPLE_CHARS * 8 {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Text filter exceeds the 1 KiB limit",
+            ));
+        }
+        let index = self.column_index(name)?;
+        let column = &self.columns[index];
+        let needle_folded = needle.to_lowercase();
+        let mut keep = Vec::with_capacity(self.rows);
+        for value in &column.values {
+            job.check()?;
+            let text = match value {
+                Scalar::Null => {
+                    keep.push(false);
+                    continue;
+                }
+                Scalar::Categorical(id) => column
+                    .categories
+                    .get(*id as usize)
+                    .ok_or_else(|| Error::input("Invalid categorical value"))?
+                    .clone(),
+                value => scalar_text(value, &column.categories, None),
+            };
+            let matched = match mode {
+                TextMatch::Contains => text.contains(needle),
+                TextMatch::NotContains => !text.contains(needle),
+                TextMatch::ContainsInsensitive => text.to_lowercase().contains(&needle_folded),
+                TextMatch::StartsWith => text.starts_with(needle),
+                TextMatch::EndsWith => text.ends_with(needle),
+            };
+            keep.push(matched);
+        }
+        self.retain_rows(&keep, job)
     }
 
     /// Filter a numeric column by a finite real threshold. Integer columns are
@@ -2363,6 +2421,27 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["two", "second", "first", "missing"]
         );
+    }
+
+    #[test]
+    fn typed_text_filters_preserve_schema_values_and_null_semantics() {
+        let source = table(
+            vec!["group", "score"],
+            vec![vec!["North", "1"], vec!["south", "2"], vec!["", "3"]],
+        );
+        let request = SchemaRequest {
+            overrides: BTreeMap::from([("group".into(), ColumnType::Categorical)]),
+            metadata: BTreeMap::new(),
+        };
+        let mut typed = TypedTable::infer(&source, request, &Job::new()).unwrap();
+        typed
+            .filter_text("group", "NORTH", TextMatch::ContainsInsensitive, &Job::new())
+            .unwrap();
+        assert_eq!(typed.rows, 1);
+        assert_eq!(typed.columns[0].kind, ColumnType::Categorical);
+        assert_eq!(typed.columns[0].categories[0], "North");
+        assert_eq!(typed.columns[0].values, [Scalar::Categorical(0)]);
+        assert_eq!(typed.columns[1].values, [Scalar::Int64(1)]);
     }
 
     #[test]

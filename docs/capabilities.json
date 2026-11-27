@@ -148,12 +148,12 @@
     },
     {
       "operation": "run-project",
-      "description": "Replay version 1 text projects or typed pipelines with comparisons, bounded numeric expressions, schema-preserving rename, type-checked inner joins, typed grouped sum/mean and Arrow-preserving Parquet output",
+      "description": "Replay version 1 text projects or typed pipelines with comparisons, text predicates, bounded numeric expressions, schema-preserving rename, type-checked inner joins, typed grouped sum/mean and Arrow-preserving Parquet output",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; CSV/TSV typed project imports decode directly to typed columns; typed numeric expressions, comparisons, null propagation, metadata round-trip, stable sorting, type-preserving rename/join, grouped sum/mean and aggregation overflow fixtures are implemented; hosted verification pending"
+      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; typed project fixtures cover delimited columnar import, numeric expressions, text predicates, comparisons, null propagation, metadata round-trip, stable sorting, type-preserving rename/join, grouped sum/mean and aggregation overflow; latest hosted Quick check passed"
     },
     {
       "operation": "select-sql",

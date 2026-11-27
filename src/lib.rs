@@ -1974,6 +1974,47 @@ mod tests {
     }
 
     #[test]
+    fn typed_project_text_filter_preserves_categorical_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("text-filter.csv");
+        let project_path = dir.path().join("text-filter-project.json");
+        let output = dir.path().join("text-filter.parquet");
+        let original = "region,value\nNorth,1\nsouth,2\n,3\n";
+        std::fs::write(&input, original).unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {"overrides": {"region": "categorical"}},
+                "steps": [
+                    {"operation": "filter-contains-insensitive", "column": "region", "value": "NORTH"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let result = handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(result.written, Some(output.clone()));
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert!(matches!(reader.schema().field(0).data_type(), DataType::Dictionary(_, _)));
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 1);
+    }
+
+    #[test]
     fn typed_project_renames_and_inner_joins_preserving_types_nulls_and_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("left.csv");
