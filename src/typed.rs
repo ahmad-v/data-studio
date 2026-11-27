@@ -900,7 +900,10 @@ impl TypedTable {
         }
         let index = self.column_index(name)?;
         let column = &self.columns[index];
-        if !matches!(column.kind, ColumnType::Int64 | ColumnType::UInt64 | ColumnType::Float64) {
+        if !matches!(
+            column.kind,
+            ColumnType::Int64 | ColumnType::UInt64 | ColumnType::Float64
+        ) {
             return Err(Error::input(format!(
                 "Numeric filter column {name:?} must have an integer or floating-point type"
             )));
@@ -911,9 +914,7 @@ impl TypedTable {
             let ordering = match value {
                 Scalar::Null => None,
                 Scalar::Float64(value) => value.partial_cmp(&threshold),
-                Scalar::Int64(value)
-                    if value.unsigned_abs() <= MAX_EXACT_FLOAT64_INTEGER =>
-                {
+                Scalar::Int64(value) if value.unsigned_abs() <= MAX_EXACT_FLOAT64_INTEGER => {
                     (*value as f64).partial_cmp(&threshold)
                 }
                 Scalar::UInt64(value) if *value <= MAX_EXACT_FLOAT64_INTEGER => {
@@ -924,7 +925,11 @@ impl TypedTable {
                         "Numeric comparison for {name:?} exceeds the exact floating-point range"
                     )))
                 }
-                _ => return Err(Error::input("Typed numeric column contains an invalid value")),
+                _ => {
+                    return Err(Error::input(
+                        "Typed numeric column contains an invalid value",
+                    ))
+                }
             };
             keep.push(ordering.is_some_and(|ordering| match comparison {
                 TypedComparison::Eq => ordering == std::cmp::Ordering::Equal,

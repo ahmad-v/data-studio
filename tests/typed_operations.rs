@@ -29,7 +29,10 @@ fn ordinary_csv_numeric_filters_use_typed_values_and_keep_source() {
         "filter-number-between",
         r#"{"column":"score","lower":2.5,"upper":3.5}"#,
     );
-    assert_eq!(fs::read_to_string(output).unwrap(), "id,score\nb,2.5\nc,3.5\n");
+    assert_eq!(
+        fs::read_to_string(output).unwrap(),
+        "id,score\nb,2.5\nc,3.5\n"
+    );
     assert_eq!(fs::read_to_string(input).unwrap(), original);
 }
 
@@ -73,7 +76,10 @@ fn typed_inequality_and_null_filters_are_type_aware_and_guard_precision() {
         "filter-not-equal",
         r#"{"column":"value","value":"2"}"#,
     );
-    assert_eq!(fs::read_to_string(output).unwrap(), "value,label\n3,three\n");
+    assert_eq!(
+        fs::read_to_string(output).unwrap(),
+        "value,label\n3,three\n"
+    );
 
     let output = dir.path().join("complete.csv");
     run(&input, &output, "drop-rows-any-missing", "{}");

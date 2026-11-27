@@ -1106,36 +1106,21 @@ fn try_typed_basic_operation(
     } else {
         match step.expect("non-join operations have a parsed typed step") {
             Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
-            Step::FilterNotEqual { column, value } => table.filter_compare(
-                &column,
-                typed::TypedComparison::Ne,
-                &value,
-                job,
-            )?,
-            Step::FilterNumberGreater { column, value } => table.filter_number(
-                &column,
-                typed::TypedComparison::Gt,
-                value,
-                job,
-            )?,
-            Step::FilterNumberGreaterEqual { column, value } => table.filter_number(
-                &column,
-                typed::TypedComparison::Gte,
-                value,
-                job,
-            )?,
-            Step::FilterNumberLess { column, value } => table.filter_number(
-                &column,
-                typed::TypedComparison::Lt,
-                value,
-                job,
-            )?,
-            Step::FilterNumberLessEqual { column, value } => table.filter_number(
-                &column,
-                typed::TypedComparison::Lte,
-                value,
-                job,
-            )?,
+            Step::FilterNotEqual { column, value } => {
+                table.filter_compare(&column, typed::TypedComparison::Ne, &value, job)?
+            }
+            Step::FilterNumberGreater { column, value } => {
+                table.filter_number(&column, typed::TypedComparison::Gt, value, job)?
+            }
+            Step::FilterNumberGreaterEqual { column, value } => {
+                table.filter_number(&column, typed::TypedComparison::Gte, value, job)?
+            }
+            Step::FilterNumberLess { column, value } => {
+                table.filter_number(&column, typed::TypedComparison::Lt, value, job)?
+            }
+            Step::FilterNumberLessEqual { column, value } => {
+                table.filter_number(&column, typed::TypedComparison::Lte, value, job)?
+            }
             Step::FilterNumberBetween {
                 column,
                 lower,
