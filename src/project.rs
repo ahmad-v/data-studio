@@ -297,9 +297,8 @@ impl Project {
                     } else {
                         self.project_directory.join(right_path)
                     };
-                    TypedTable::from_path(&path, None, right_schema, job).and_then(|right| {
-                        table.inner_join(right, &left_key, &right_key, job)
-                    })
+                    TypedTable::from_path(&path, None, right_schema, job)
+                        .and_then(|right| table.inner_join(right, &left_key, &right_key, job))
                 }
                 step => {
                     let result = match step {

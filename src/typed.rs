@@ -250,7 +250,10 @@ fn typed_join_key(column: &Column, value: &Scalar) -> Result<Option<String>> {
 
 fn validate_schema_request(headers: &[String], request: &SchemaRequest) -> Result<()> {
     validate_headers(headers)?;
-    let names = headers.iter().map(String::as_str).collect::<std::collections::HashSet<_>>();
+    let names = headers
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
     if request
         .overrides
         .keys()
@@ -718,7 +721,12 @@ impl TypedTable {
             Some(kind @ ("csv" | "tsv")) => {
                 let bytes = read_bounded(path, MAX_BYTES)?;
                 job.check()?;
-                Self::from_delimited_bytes(&bytes, if kind == "tsv" { b'\t' } else { b',' }, request, job)
+                Self::from_delimited_bytes(
+                    &bytes,
+                    if kind == "tsv" { b'\t' } else { b',' },
+                    request,
+                    job,
+                )
             }
             _ => {
                 let source = super::load(path, sheet, job)?;
@@ -764,7 +772,13 @@ impl TypedTable {
         let kinds = headers
             .iter()
             .zip(inference)
-            .map(|(name, state)| request.overrides.get(name).copied().unwrap_or_else(|| state.finish()))
+            .map(|(name, state)| {
+                request
+                    .overrides
+                    .get(name)
+                    .copied()
+                    .unwrap_or_else(|| state.finish())
+            })
             .collect::<Vec<_>>();
         let mut values = (0..headers.len())
             .map(|_| Vec::with_capacity(row_count))
@@ -1894,9 +1908,7 @@ fn convert_cell(
         }
         ColumnType::Date => Scalar::Date(parse_date(cell.trim()).ok_or_else(invalid)?),
         ColumnType::Time => Scalar::Time(parse_time(cell.trim()).ok_or_else(invalid)?),
-        ColumnType::DateTime => {
-            Scalar::DateTime(parse_datetime(cell.trim()).ok_or_else(invalid)?)
-        }
+        ColumnType::DateTime => Scalar::DateTime(parse_datetime(cell.trim()).ok_or_else(invalid)?),
         ColumnType::Categorical => {
             let id = if let Some(id) = category_ids.get(cell) {
                 *id
