@@ -53,6 +53,16 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"unpivot",label:"Unpivot wide to long",hint:r#"Parameter JSON: {"id_columns":["id"],"value_columns":["2024","2025"],"variable_name":"year","value_name":"value"}."#},
  Operation{id:"group-sum",label:"Group and sum",hint:r#"Parameter JSON: {"group_column":"site","value_column":"count"}. Blank numeric cells are excluded; exact text groups retained."#},
  Operation{id:"group-mean",label:"Group and average",hint:r#"Parameter JSON: {"group_column":"site","value_column":"score"}. Blank numeric cells are excluded; exact text groups retained."#},
+ Operation{id:"filter-contains",label:"Filter literal contains",hint:r#"Parameter JSON: {"column":"name","value":"Ada"}. Case-sensitive literal substring match; empty search terms are rejected."#},
+ Operation{id:"filter-not-contains",label:"Filter literal does not contain",hint:r#"Parameter JSON: {"column":"name","value":"test"}. Case-sensitive literal substring exclusion."#},
+ Operation{id:"head-rows",label:"Keep first rows",hint:r#"Parameter JSON: {"rows":100}. Keeps the first N rows in their existing order."#},
+ Operation{id:"tail-rows",label:"Keep last rows",hint:r#"Parameter JSON: {"rows":100}. Keeps the last N rows in their existing order."#},
+ Operation{id:"drop-duplicates-by-columns",label:"Drop duplicates by columns",hint:r#"Parameter JSON: {"columns":["email"]}. Keeps the first exact key occurrence in input order."#},
+ Operation{id:"add-index-column",label:"Add row index",hint:r#"Parameter JSON: {"name":"row_number","start":1}. Adds sequential signed 64-bit indices in row order."#},
+ Operation{id:"add-constant-column",label:"Add constant column",hint:r#"Parameter JSON: {"name":"cohort","value":"pilot"}. Adds the specified text to every row."#},
+ Operation{id:"normalize-text",label:"Normalize text column",hint:r#"Parameter JSON: {"column":"name","mode":"trim"}. Modes: trim, lower, upper, collapse-whitespace."#},
+ Operation{id:"rename-columns",label:"Rename columns",hint:r#"Parameter JSON: {"mapping":{"old_name":"new_name"}}. Renames several columns atomically; names must remain unique."#},
+ Operation{id:"drop-columns",label:"Drop columns",hint:r#"Parameter JSON: {"columns":["temporary"]}. Keeps at least one column and preserves the remaining order."#},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
  Operation{id:"line-chart",label:"Line chart SVG",hint:"Enter x-column,y-column. Complete numeric rows connect in table order. Choose a new .svg file."},
@@ -325,7 +335,17 @@ fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
         | Step::Pivot { .. }
         | Step::Unpivot { .. }
         | Step::GroupSum { .. }
-        | Step::GroupMean { .. }) => return transform::apply(table, step, job),
+        | Step::GroupMean { .. }
+        | Step::FilterContains { .. }
+        | Step::FilterNotContains { .. }
+        | Step::HeadRows { .. }
+        | Step::TailRows { .. }
+        | Step::DropDuplicatesByColumns { .. }
+        | Step::AddIndexColumn { .. }
+        | Step::AddConstantColumn { .. }
+        | Step::NormalizeText { .. }
+        | Step::RenameColumns { .. }
+        | Step::DropColumns { .. }) => return transform::apply(table, step, job),
         Step::SelectColumns { columns } => {
             return select_columns(table, columns.iter().map(String::as_str), job)
         }
@@ -428,6 +448,16 @@ fn request_step(operation: &str, parameter: &str) -> Result<Option<Step>> {
             | "unpivot"
             | "group-sum"
             | "group-mean"
+            | "filter-contains"
+            | "filter-not-contains"
+            | "head-rows"
+            | "tail-rows"
+            | "drop-duplicates-by-columns"
+            | "add-index-column"
+            | "add-constant-column"
+            | "normalize-text"
+            | "rename-columns"
+            | "drop-columns"
     ) {
         return transform::parse_step(operation, parameter).map(Some);
     }
@@ -970,12 +1000,43 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 points.len()
             )
         }
-        "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate"
-        | "mask-column" | "run-project" | "inner-join" | "left-join" | "right-join"
-        | "full-join" | "group-summary" | "select-sql" | "drop-missing" | "fill-missing"
-        | "rename-column" | "recode-values" | "convert-number" | "convert-integer"
-        | "convert-boolean" | "split-column" | "merge-columns" | "pivot" | "unpivot"
-        | "group-sum" | "group-mean" => {
+        "preview"
+        | "filter"
+        | "export"
+        | "select-columns"
+        | "sort"
+        | "deduplicate"
+        | "mask-column"
+        | "run-project"
+        | "inner-join"
+        | "left-join"
+        | "right-join"
+        | "full-join"
+        | "group-summary"
+        | "select-sql"
+        | "drop-missing"
+        | "fill-missing"
+        | "rename-column"
+        | "recode-values"
+        | "convert-number"
+        | "convert-integer"
+        | "convert-boolean"
+        | "split-column"
+        | "merge-columns"
+        | "pivot"
+        | "unpivot"
+        | "group-sum"
+        | "group-mean"
+        | "filter-contains"
+        | "filter-not-contains"
+        | "head-rows"
+        | "tail-rows"
+        | "drop-duplicates-by-columns"
+        | "add-index-column"
+        | "add-constant-column"
+        | "normalize-text"
+        | "rename-columns"
+        | "drop-columns" => {
             if let Some(project) = project {
                 let (result, steps, masked) = project.run(t, &j)?;
                 t = result;

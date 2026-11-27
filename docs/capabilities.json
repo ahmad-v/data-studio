@@ -382,6 +382,96 @@
         "x86_64-unknown-linux-gnu"
       ],
       "fixture_status": "Route and project fixtures verify blank handling and exact groups"
+    },
+    {
+      "operation": "filter-contains",
+      "description": "Case-sensitive literal substring inclusion filter",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "filter-not-contains",
+      "description": "Case-sensitive literal substring exclusion filter",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "head-rows",
+      "description": "Keep a bounded prefix of table rows",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "tail-rows",
+      "description": "Keep a bounded suffix of table rows",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "drop-duplicates-by-columns",
+      "description": "First-occurrence deduplication on selected exact-text keys",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "add-index-column",
+      "description": "Add sequential signed 64-bit row indices",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "add-constant-column",
+      "description": "Add a literal constant text column",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "normalize-text",
+      "description": "Unicode trimming, case conversion or whitespace collapse",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "rename-columns",
+      "description": "Atomically rename multiple table columns",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+    },
+    {
+      "operation": "drop-columns",
+      "description": "Remove selected columns while retaining at least one column",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
     }
   ]
 }

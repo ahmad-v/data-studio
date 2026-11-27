@@ -42,6 +42,16 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | unpivot | Wide-to-long reshape with selected id/value columns | Linux route and project fixtures |
 | group-sum | Grouped finite numeric sum | Linux route and project fixtures |
 | group-mean | Grouped finite numeric mean | Linux route and project fixtures |
+| filter-contains | Case-sensitive literal substring inclusion | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| filter-not-contains | Case-sensitive literal substring exclusion | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| head-rows | Keep first N rows in source order | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| tail-rows | Keep last N rows in source order | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| drop-duplicates-by-columns | Keep first exact key occurrence in selected columns | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| add-index-column | Add sequential signed 64-bit row index | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| add-constant-column | Add literal text to every row | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| normalize-text | Trim, Unicode case change, or collapse whitespace | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| rename-columns | Atomically rename multiple columns | Linux route and versioned-project fixtures passed; hosted matrix pending |
+| drop-columns | Drop selected columns while retaining at least one | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
 | correlation | Pearson coefficient on complete numeric pairs | Linux fixture-tested |

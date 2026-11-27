@@ -6,6 +6,14 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `counts`: Counts exact cell values, including blank text. The preview reports the 30 most frequent values and the total number of distinct values.
 - `preview`: Preview CSV, XLSX or Parquet as text. For XLSX preview and export, enter the exact worksheet name or leave the parameter blank to use the first sheet.
 - `filter`: Exact-match filter; CSV or string Parquet.
+- `filter-contains` and `filter-not-contains`: JSON parameters name a column and nonempty literal substring. Matching is case-sensitive and does not interpret the search text as a pattern.
+- `head-rows` and `tail-rows`: JSON parameter `{"rows":N}` keeps the first or last N rows, preserving source order. N is limited to 500,000.
+- `drop-duplicates-by-columns`: JSON parameter `{"columns":["email"]}` compares exact cell text in the chosen key columns and keeps the first occurrence.
+- `add-index-column`: JSON parameter `{"name":"row_number","start":1}` adds sequential signed 64-bit values in current row order and rejects overflow.
+- `add-constant-column`: JSON parameter `{"name":"cohort","value":"pilot"}` copies the literal value into a new column.
+- `normalize-text`: JSON parameter `{"column":"name","mode":"trim"}` supports `trim`, Unicode lowercase, Unicode uppercase, and `collapse-whitespace` (Unicode whitespace collapsed to one ASCII space).
+- `rename-columns`: JSON parameter `{"mapping":{"old_a":"new_a","old_b":"new_b"}}` applies all changes atomically; final names must be unique.
+- `drop-columns`: JSON parameter `{"columns":["temporary"]}` removes selected columns, retains input order for the rest, and requires at least one remaining column.
 - `sort`: Enter the exact column name. Rows with equal values retain their order. Values sort as text, so `10` precedes `2`.
 - `deduplicate`: Keep the first occurrence of each full row. Leave the parameter blank. Both operations can preview rows or export to a new CSV, TSV or Parquet file.
 - `mask-column`: Enter the exact column name to replace its nonempty values with `[MASKED]`. Preview the result or export a new CSV, TSV or Parquet file. Review other columns and blank patterns before sharing masked data.

@@ -81,6 +81,41 @@ pub enum Step {
         group_column: String,
         value_column: String,
     },
+    FilterContains {
+        column: String,
+        value: String,
+    },
+    FilterNotContains {
+        column: String,
+        value: String,
+    },
+    HeadRows {
+        rows: usize,
+    },
+    TailRows {
+        rows: usize,
+    },
+    DropDuplicatesByColumns {
+        columns: Vec<String>,
+    },
+    AddIndexColumn {
+        name: String,
+        start: i64,
+    },
+    AddConstantColumn {
+        name: String,
+        value: String,
+    },
+    NormalizeText {
+        column: String,
+        mode: String,
+    },
+    RenameColumns {
+        mapping: std::collections::BTreeMap<String, String>,
+    },
+    DropColumns {
+        columns: Vec<String>,
+    },
 }
 
 impl Project {
