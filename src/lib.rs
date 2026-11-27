@@ -4,6 +4,7 @@ mod project;
 mod sql;
 mod statistics;
 mod transform;
+mod typed;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx};
@@ -16,6 +17,7 @@ use project::{Project, Step};
 use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
  Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
+ Operation{id:"inspect-schema",label:"Inspect typed schema",hint:r#"Optional JSON: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates per-column types and missing values without changing source data. Optional new .json report."#},
  Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv, .tsv or .parquet output."},
  Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Optional new CSV or Parquet output."},
  Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Stable ascending text order. Optional CSV, TSV or Parquet output."},
@@ -1006,6 +1008,31 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         ));
     }
     let mut t = load(&r.input, sheet, &j)?;
+    if r.operation == "inspect-schema" {
+        let schema_request = typed::SchemaRequest::from_json(&r.parameter)?;
+        let typed = typed::TypedTable::infer(&t, schema_request, &j)?;
+        let report = serde_json::to_string_pretty(&typed.schema_report())?;
+        let mut written = None;
+        if !r.output.as_os_str().is_empty() {
+            if !r
+                .output
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+            {
+                return Err(Error::input("Schema reports require a .json output"));
+            }
+            j.check()?;
+            write_bytes(&r.output, report.as_bytes())?;
+            written = Some(r.output);
+        }
+        return Ok(Outcome {
+            preview: report,
+            written,
+            warnings: vec!["Schema inspection builds a typed columnar view; the source table remains unchanged. Whitespace-only cells are null; other text is preserved.".into()],
+            ..Outcome::default()
+        });
+    }
     let mut written = None;
     let mut warnings = vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()];
     let preview = match r.operation.as_str() {
@@ -1598,6 +1625,34 @@ mod tests {
         let imported = load(&output, None, &Job::new()).unwrap();
         assert_eq!(imported.headers, table.headers);
         assert_eq!(imported.rows, table.rows);
+    }
+
+    #[test]
+    fn schema_inspection_is_user_routed_and_never_modifies_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("measurements.csv");
+        let output = dir.path().join("schema.json");
+        let original = "score,site\n1.5,north\n2.5,south\n, north \n";
+        std::fs::write(&input, original).unwrap();
+        let request = Request {
+            operation: "inspect-schema".into(),
+            input: input.clone(),
+            output: output.clone(),
+            parameter: r#"{"overrides":{"score":"float64","site":"categorical"},"metadata":{"score":{"label":"Response","unit":"points"}}}"#.into(),
+            ..Request::default()
+        };
+        let outcome = handle(request.clone(), Job::new()).unwrap();
+        let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+        assert_eq!(report["rows"], 3);
+        assert_eq!(report["columns"][0]["type"], "float64");
+        assert_eq!(report["columns"][0]["missing"], 1);
+        assert_eq!(report["columns"][0]["unit"], "points");
+        assert_eq!(report["columns"][1]["categories"], 3);
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(&output).unwrap(), outcome.preview);
+
+        assert!(handle(request, Job::new()).is_err());
+        assert_eq!(std::fs::read_to_string(&output).unwrap(), outcome.preview);
     }
 
     #[test]

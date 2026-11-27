@@ -59,6 +59,15 @@
       "fixture_status": "not run"
     },
     {
+      "operation": "inspect-schema",
+      "description": "Columnar typed schema inference, explicit type overrides, null counts, category dictionary metadata, labels and units; source data unchanged",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Typed inference and user-route fixtures passed in the Linux test suite; hosted native matrix pending"
+    },
+    {
       "operation": "filter",
       "description": "Exact-match filter; CSV or string Parquet",
       "status": "implemented-unverified",

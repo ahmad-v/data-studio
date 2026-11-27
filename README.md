@@ -7,6 +7,7 @@ This independent studio uses Localwright at source level. There is no separate m
 ## What is in this snapshot
 
 - CSV / first XLSX sheet text preview (implemented-unverified).
+- `inspect-schema` builds a typed columnar schema view with inference, explicit overrides, null counts, categorical dictionary counts, labels and units; it leaves source cells unchanged.
 - Exact-match filter; CSV or string Parquet (implemented-unverified).
 - Numeric column n, missing, mean, sample SD, min/max (implemented-unverified).
 - CSV formula guard; Parquet UTF-8 columns (implemented-unverified).
@@ -16,7 +17,7 @@ The project is intended to remain free, local and offline, without tracking, adv
 
 ## Development
 
-See [build notes](docs/BUILD.md), [status](docs/STATUS.md), [architecture](docs/ARCHITECTURE.md) and [manual](docs/MANUAL.md). The complete [master specification](MASTER_SPECIFICATION.md) defines the remaining requirements. No compilation, platform support or package has been verified in this snapshot.
+See [build notes](docs/BUILD.md), [status](docs/STATUS.md), [architecture](docs/ARCHITECTURE.md) and [manual](docs/MANUAL.md). The complete [master specification](MASTER_SPECIFICATION.md) defines the remaining requirements. This development branch is being checked on Linux and hosted native targets; successful test and platform evidence is recorded in the handoff and CI runs. It is not a verified release or installer.
 
 ## Citation and contributions
 
