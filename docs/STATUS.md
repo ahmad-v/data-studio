@@ -85,6 +85,6 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 
 ## Known gaps
 
-In-memory text table only; no inferred or preserved typed schema, large-data virtualization, formulas, regex transforms, multi-key/duplicate-aggregating pivot, project editor, undo, batch runs, other formats, authoritative palettes or full scientific export. Explicit number/integer/boolean operations validate and normalize cell text without changing the table's string schema. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.
+In-memory text table only; no inferred or preserved typed schema, large-data virtualization, general formula language, regex transforms, multi-key/duplicate-aggregating pivot, project editor, undo, batch runs, other formats, authoritative palettes or full scientific export. Explicit numeric derivation and number/integer/boolean conversion routes normalize results as text without changing the table's string schema. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.
 
 Hosted matrix, device, and packaging verification remain open. See [verification evidence](VERIFICATION.md) and [dependency review](DEPENDENCIES.md).
