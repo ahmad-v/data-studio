@@ -1843,7 +1843,9 @@ mod tests {
             Job::new(),
         )
         .unwrap_err();
-        assert!(error.message.contains("require a project with typed_schema"));
+        assert!(error
+            .message
+            .contains("require a project with typed_schema"));
         assert!(!output.exists());
     }
 
