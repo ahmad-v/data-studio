@@ -2279,10 +2279,7 @@ mod tests {
         );
         let bytes = localwright_core::read_bounded(&text_filtered, 16 * 1024 * 1024).unwrap();
         let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
-        assert_eq!(
-            reader.schema().field(2).data_type(),
-            &DataType::Utf8
-        );
+        assert_eq!(reader.schema().field(2).data_type(), &DataType::Utf8);
         let mut batches = reader.build().unwrap();
         assert_eq!(batches.next().unwrap().unwrap().num_rows(), 1);
 
