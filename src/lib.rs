@@ -63,6 +63,16 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"normalize-text",label:"Normalize text column",hint:r#"Parameter JSON: {"column":"name","mode":"trim"}. Modes: trim, lower, upper, collapse-whitespace."#},
  Operation{id:"rename-columns",label:"Rename columns",hint:r#"Parameter JSON: {"mapping":{"old_name":"new_name"}}. Renames several columns atomically; names must remain unique."#},
  Operation{id:"drop-columns",label:"Drop columns",hint:r#"Parameter JSON: {"columns":["temporary"]}. Keeps at least one column and preserves the remaining order."#},
+ Operation{id:"filter-not-equal",label:"Filter not equal",hint:r#"Parameter JSON: {"column":"status","value":"closed"}. Keeps rows whose exact text differs."#},
+ Operation{id:"filter-contains-insensitive",label:"Filter contains (case-insensitive)",hint:r#"Parameter JSON: {"column":"name","value":"ada"}. Uses Unicode lowercase matching; search text cannot be empty."#},
+ Operation{id:"filter-starts-with",label:"Filter starts with",hint:r#"Parameter JSON: {"column":"code","value":"AB"}. Case-sensitive literal prefix match."#},
+ Operation{id:"filter-ends-with",label:"Filter ends with",hint:r#"Parameter JSON: {"column":"file","value":".csv"}. Case-sensitive literal suffix match."#},
+ Operation{id:"replace-literal",label:"Replace literal text",hint:r#"Parameter JSON: {"column":"notes","find":"old","replace":"new"}. Replaces all non-overlapping literal matches in one column."#},
+ Operation{id:"drop-rows-any-missing",label:"Drop rows with any missing cells",hint:"Removes a row when any cell is blank or whitespace-only."},
+ Operation{id:"fill-forward",label:"Fill forward",hint:r#"Parameter JSON: {"column":"group"}. Fills blank cells from the nearest preceding nonblank value; leading blanks remain blank."#},
+ Operation{id:"fill-backward",label:"Fill backward",hint:r#"Parameter JSON: {"column":"group"}. Fills blank cells from the nearest following nonblank value; trailing blanks remain blank."#},
+ Operation{id:"drop-empty-columns",label:"Drop empty columns",hint:"Removes columns whose cells are all blank or whitespace-only. At least one nonempty column must remain."},
+ Operation{id:"reverse-rows",label:"Reverse row order",hint:"Reverses table rows without changing their cell values."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
  Operation{id:"line-chart",label:"Line chart SVG",hint:"Enter x-column,y-column. Complete numeric rows connect in table order. Choose a new .svg file."},
@@ -345,7 +355,17 @@ fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
         | Step::AddConstantColumn { .. }
         | Step::NormalizeText { .. }
         | Step::RenameColumns { .. }
-        | Step::DropColumns { .. }) => return transform::apply(table, step, job),
+        | Step::DropColumns { .. }
+        | Step::FilterNotEqual { .. }
+        | Step::FilterContainsInsensitive { .. }
+        | Step::FilterStartsWith { .. }
+        | Step::FilterEndsWith { .. }
+        | Step::ReplaceLiteral { .. }
+        | Step::DropRowsAnyMissing { .. }
+        | Step::FillForward { .. }
+        | Step::FillBackward { .. }
+        | Step::DropEmptyColumns { .. }
+        | Step::ReverseRows { .. }) => return transform::apply(table, step, job),
         Step::SelectColumns { columns } => {
             return select_columns(table, columns.iter().map(String::as_str), job)
         }
@@ -458,6 +478,13 @@ fn request_step(operation: &str, parameter: &str) -> Result<Option<Step>> {
             | "normalize-text"
             | "rename-columns"
             | "drop-columns"
+            | "filter-not-equal"
+            | "filter-contains-insensitive"
+            | "filter-starts-with"
+            | "filter-ends-with"
+            | "replace-literal"
+            | "fill-forward"
+            | "fill-backward"
     ) {
         return transform::parse_step(operation, parameter).map(Some);
     }
@@ -500,6 +527,9 @@ fn request_step(operation: &str, parameter: &str) -> Result<Option<Step>> {
         "mask-column" => Step::MaskColumn {
             column: parameter.into(),
         },
+        "drop-rows-any-missing" => Step::DropRowsAnyMissing {},
+        "drop-empty-columns" => Step::DropEmptyColumns {},
+        "reverse-rows" => Step::ReverseRows {},
         _ => return Ok(None),
     };
     Ok(Some(step))
@@ -1036,7 +1066,17 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         | "add-constant-column"
         | "normalize-text"
         | "rename-columns"
-        | "drop-columns" => {
+        | "drop-columns"
+        | "filter-not-equal"
+        | "filter-contains-insensitive"
+        | "filter-starts-with"
+        | "filter-ends-with"
+        | "replace-literal"
+        | "drop-rows-any-missing"
+        | "fill-forward"
+        | "fill-backward"
+        | "drop-empty-columns"
+        | "reverse-rows" => {
             if let Some(project) = project {
                 let (result, steps, masked) = project.run(t, &j)?;
                 t = result;

@@ -14,6 +14,14 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `normalize-text`: JSON parameter `{"column":"name","mode":"trim"}` supports `trim`, Unicode lowercase, Unicode uppercase, and `collapse-whitespace` (Unicode whitespace collapsed to one ASCII space).
 - `rename-columns`: JSON parameter `{"mapping":{"old_a":"new_a","old_b":"new_b"}}` applies all changes atomically; final names must be unique.
 - `drop-columns`: JSON parameter `{"columns":["temporary"]}` removes selected columns, retains input order for the rest, and requires at least one remaining column.
+- `filter-not-equal`: JSON parameter `{"column":"status","value":"closed"}` retains rows that differ by exact text.
+- `filter-contains-insensitive`: JSON parameter `{"column":"name","value":"ada"}` compares Unicode lowercase text; it is not locale-specific collation or full linguistic case-folding.
+- `filter-starts-with` and `filter-ends-with`: JSON parameters name a column and a nonempty literal prefix or suffix. Matching is case-sensitive.
+- `replace-literal`: JSON parameter `{"column":"notes","find":"old","replace":"new"}` replaces all non-overlapping literal matches in one column. Empty find strings are rejected and the 32 MiB transformed-text bound applies before replacement.
+- `drop-rows-any-missing`: Removes each row containing any empty or whitespace-only cell.
+- `fill-forward` and `fill-backward`: JSON parameter `{"column":"group"}` fills blanks from the nearest preceding or following nonblank cell. Leading or trailing blanks without a source value remain blank.
+- `drop-empty-columns`: Removes columns that contain only blank or whitespace-only cells. It errors if no nonempty column remains.
+- `reverse-rows`: Reverses row order and preserves headers and cell text.
 - `sort`: Enter the exact column name. Rows with equal values retain their order. Values sort as text, so `10` precedes `2`.
 - `deduplicate`: Keep the first occurrence of each full row. Leave the parameter blank. Both operations can preview rows or export to a new CSV, TSV or Parquet file.
 - `mask-column`: Enter the exact column name to replace its nonempty values with `[MASKED]`. Preview the result or export a new CSV, TSV or Parquet file. Review other columns and blank patterns before sharing masked data.
