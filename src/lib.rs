@@ -20,6 +20,9 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
  Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
  Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Exact nonblank text keys. Optional new CSV, TSV or Parquet output."#},
+ Operation{id:"left-join",label:"Left join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched left rows; nonmatching right columns are blank. Exact nonblank text keys."#},
+ Operation{id:"right-join",label:"Right join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched right rows; nonmatching left columns are blank. Exact nonblank text keys."#},
+ Operation{id:"full-join",label:"Full outer join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched rows from both tables; missing-side columns are blank."#},
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank."},
@@ -770,8 +773,9 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             )
         }
         "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate"
-        | "mask-column" | "run-project" | "inner-join" | "group-summary" | "select-sql"
-        | "drop-missing" | "fill-missing" | "rename-column" => {
+        | "mask-column" | "run-project" | "inner-join" | "left-join" | "right-join"
+        | "full-join" | "group-summary" | "select-sql" | "drop-missing" | "fill-missing"
+        | "rename-column" => {
             if let Some(project) = project {
                 let (result, steps, masked) = project.run(t, &j)?;
                 t = result;
@@ -786,9 +790,18 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 let (group, value) = column_pair(&t, &r.parameter)?;
                 t = grouped_summary(&t, group, value, &j)?;
                 warnings.push("Group labels are exact text, including blanks. Blank numeric cells are excluded, undefined statistics are blank, and sample SD uses n-1.".into());
-            } else if r.operation == "inner-join" {
-                t = join::inner(t, &r.parameter, &j)?;
-                warnings.push("Inner join uses exact text keys. Blank and unmatched keys are excluded. Matching duplicate keys produce every matching pair.".into());
+            } else if matches!(
+                r.operation.as_str(),
+                "inner-join" | "left-join" | "right-join" | "full-join"
+            ) {
+                let (kind, warning) = match r.operation.as_str() {
+                    "left-join" => (join::Kind::Left, "Left join uses exact text keys. Blank keys do not match; unmatched left rows are preserved with blank right columns. Duplicate matches produce every matching pair."),
+                    "right-join" => (join::Kind::Right, "Right join uses exact text keys. Blank keys do not match; unmatched right rows are preserved with blank left columns. Results follow right input order, with duplicate left matches in left input order."),
+                    "full-join" => (join::Kind::Full, "Full outer join uses exact text keys. Blank keys do not match; unmatched rows from both tables are preserved with blank columns on the missing side."),
+                    _ => (join::Kind::Inner, "Inner join uses exact text keys. Blank and unmatched keys are excluded. Matching duplicate keys produce every matching pair."),
+                };
+                t = join::run(t, &r.parameter, kind, &j)?;
+                warnings.push(warning.into());
             } else if let Some(step) = request_step(&r.operation, &r.parameter)? {
                 if matches!(step, Step::MaskColumn { .. }) {
                     warnings.push(MASK_WARNING.into());

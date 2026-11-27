@@ -15,6 +15,9 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
 | mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
 | inner-join | Exact nonblank key inner join with bounded result | Linux fixture and CLI-tested |
+| left-join | Left outer join with duplicate-key expansion and blank-key nonmatching | Linux fixture-tested |
+| right-join | Right outer join preserving right input order and every unmatched row | Linux fixture-tested |
+| full-join | Full outer join preserving unmatched rows from both tables | Linux fixture-tested |
 | run-project | Replay declared table transformations from a versioned project | Linux fixture and CLI-tested |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
