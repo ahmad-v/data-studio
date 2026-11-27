@@ -207,7 +207,7 @@
     },
     {
       "operation": "line-chart",
-      "description": "Monochrome vector lines in table order",
+      "description": "Monochrome labeled SVG line chart; accepts legacy x,y or JSON x/y/title/x_axis/y_axis parameters",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
@@ -216,7 +216,7 @@
     },
     {
       "operation": "scatter",
-      "description": "Monochrome scatter SVG, 800 x 600",
+      "description": "Monochrome labeled scatter SVG, 800 x 600; accepts legacy x,y or JSON x/y/title/x_axis/y_axis parameters",
       "status": "implemented-unverified",
       "targets": [],
       "fixture_status": "not run"
