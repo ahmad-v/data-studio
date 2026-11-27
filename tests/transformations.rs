@@ -546,6 +546,181 @@ fn all_five_numeric_filters_replay_in_a_version_one_project() {
 }
 
 #[test]
+fn binary_numeric_columns_preserve_blanks_and_reject_zero_divisors() {
+    let source = "a,b\n10,2\n-9,3\n,1\n";
+    assert_eq!(
+        operation(
+            source,
+            "add-numeric-columns",
+            json!({"left":"a","right":"b","name":"out"})
+        )["preview"],
+        json!([["10", "2", "12"], ["-9", "3", "-6"], ["", "1", ""]])
+    );
+    assert_eq!(
+        operation(
+            source,
+            "subtract-numeric-columns",
+            json!({"left":"a","right":"b","name":"out"})
+        )["preview"][0][2],
+        "8"
+    );
+    assert_eq!(
+        operation(
+            source,
+            "multiply-numeric-columns",
+            json!({"left":"a","right":"b","name":"out"})
+        )["preview"][1][2],
+        "-27"
+    );
+    assert_eq!(
+        operation(
+            source,
+            "divide-numeric-columns",
+            json!({"left":"a","right":"b","name":"out"})
+        )["preview"][0][2],
+        "5"
+    );
+    assert!(fails(
+        "a,b\n1,0\n",
+        "divide-numeric-columns",
+        json!({"left":"a","right":"b","name":"out"})
+    ));
+}
+
+#[test]
+fn percent_change_requires_nonzero_baseline_and_handles_negative_change() {
+    let result = operation(
+        "current,baseline\n15,10\n5,10\n,10\n",
+        "percent-change-column",
+        json!({"current":"current","baseline":"baseline","name":"change"}),
+    );
+    assert_eq!(
+        result["preview"],
+        json!([["15", "10", "50"], ["5", "10", "-50"], ["", "10", ""]])
+    );
+    assert!(fails(
+        "current,baseline\n1,0\n",
+        "percent-change-column",
+        json!({"current":"current","baseline":"baseline","name":"change"})
+    ));
+}
+
+#[test]
+fn unary_numeric_transforms_validate_domain_and_keep_missing_values() {
+    assert_eq!(
+        operation(
+            "x\n-9\n0\n25\n\n",
+            "absolute-value-column",
+            json!({"column":"x","name":"out"})
+        )["preview"],
+        json!([["-9", "9"], ["0", "0"], ["25", "25"]])
+    );
+    assert_eq!(
+        operation(
+            "x\n0\n25\n",
+            "square-root-column",
+            json!({"column":"x","name":"out"})
+        )["preview"],
+        json!([["0", "0"], ["25", "5"]])
+    );
+    assert!(fails(
+        "x\n-1\n",
+        "square-root-column",
+        json!({"column":"x","name":"out"})
+    ));
+    assert_eq!(
+        operation(
+            "x\n1\n10\n",
+            "log10-column",
+            json!({"column":"x","name":"out"})
+        )["preview"],
+        json!([["1", "0"], ["10", "1"]])
+    );
+    assert!(fails(
+        "x\n0\n",
+        "log10-column",
+        json!({"column":"x","name":"out"})
+    ));
+}
+
+#[test]
+fn numeric_rounding_and_clipping_enforce_precision_and_bounds() {
+    assert_eq!(
+        operation(
+            "x\n1.236\n-1.236\n",
+            "round-numeric-column",
+            json!({"column":"x","name":"out","decimal_places":2})
+        )["preview"],
+        json!([["1.236", "1.24"], ["-1.236", "-1.24"]])
+    );
+    assert_eq!(
+        operation(
+            "x\n14\n15\n25\n",
+            "round-numeric-column",
+            json!({"column":"x","name":"out","decimal_places":-1})
+        )["preview"],
+        json!([["14", "10"], ["15", "20"], ["25", "30"]])
+    );
+    assert!(fails(
+        "x\n1\n",
+        "round-numeric-column",
+        json!({"column":"x","name":"out","decimal_places":13})
+    ));
+    assert_eq!(
+        operation(
+            "x\n-5\n10\n150\n",
+            "clip-numeric-column",
+            json!({"column":"x","name":"out","minimum":0,"maximum":100})
+        )["preview"],
+        json!([["-5", "0"], ["10", "10"], ["150", "100"]])
+    );
+    assert!(fails(
+        "x\n1\n",
+        "clip-numeric-column",
+        json!({"column":"x","name":"out","minimum":2,"maximum":1})
+    ));
+}
+
+#[test]
+fn all_ten_numeric_transforms_replay_in_a_version_one_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input.csv");
+    let project = dir.path().join("project.json");
+    fs::write(&input, "a,b\n8,2\n").unwrap();
+    fs::write(
+        &project,
+        json!({"schema_version":1,"steps":[
+            {"operation":"add-numeric-columns","left":"a","right":"b","name":"sum"},
+            {"operation":"subtract-numeric-columns","left":"a","right":"b","name":"difference"},
+            {"operation":"multiply-numeric-columns","left":"a","right":"b","name":"product"},
+            {"operation":"divide-numeric-columns","left":"a","right":"b","name":"ratio"},
+            {"operation":"percent-change-column","current":"a","baseline":"b","name":"change"},
+            {"operation":"absolute-value-column","column":"difference","name":"absolute"},
+            {"operation":"square-root-column","column":"a","name":"root"},
+            {"operation":"log10-column","column":"b","name":"log"},
+            {"operation":"round-numeric-column","column":"sum","name":"rounded","decimal_places":1},
+            {"operation":"clip-numeric-column","column":"change","name":"bounded","minimum":0,"maximum":100}
+        ]}).to_string(),
+    ).unwrap();
+    let output = handle(
+        Request {
+            operation: "run-project".into(),
+            input,
+            parameter: project.to_string_lossy().into_owned(),
+            ..Request::default()
+        },
+        Job::new(),
+    )
+    .unwrap();
+    let result: Value = serde_json::from_str(&output.preview).unwrap();
+    assert_eq!(result["headers"].as_array().unwrap().len(), 12);
+    assert_eq!(result["preview"][0][2], "10");
+    assert_eq!(result["preview"][0][7], "6");
+    assert_eq!(result["preview"][0][8], "2.8284271247461903");
+    assert_eq!(result["preview"][0][11], "100");
+}
+
+#[test]
 fn all_ten_added_operations_replay_in_order_in_a_project() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("input.csv");

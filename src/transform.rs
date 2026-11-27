@@ -161,6 +161,79 @@ fn filter_numeric(
     Ok(())
 }
 
+fn add_numeric_column(
+    table: &mut Table,
+    source_columns: &[String],
+    name: String,
+    job: &Job,
+    operation: &str,
+    calculate: impl Fn(&[f64]) -> Result<f64>,
+) -> Result<()> {
+    if source_columns.is_empty() || source_columns.len() > 2 {
+        return Err(Error::input(
+            "Numeric derivation requires one or two source columns",
+        ));
+    }
+    unique_name(table, &name, &HashSet::new())?;
+    if table.headers.len() >= MAX_COLS
+        || table.rows.len().saturating_mul(table.headers.len() + 1) > MAX_CELLS
+    {
+        return Err(Error::new(
+            localwright_core::ErrorKind::Limit,
+            "Numeric result exceeds table dimensions",
+        ));
+    }
+    let indexes = source_columns
+        .iter()
+        .map(|column| crate::column(table, column))
+        .collect::<Result<Vec<_>>>()?;
+    let mut bytes = text_bytes(table)?
+        .checked_add(name.len())
+        .filter(|size| *size <= MAX_TEXT_BYTES)
+        .ok_or_else(|| {
+            Error::new(
+                localwright_core::ErrorKind::Limit,
+                "Numeric result exceeds 32 MiB",
+            )
+        })?;
+    let mut output = Vec::with_capacity(table.rows.len());
+    for row in &table.rows {
+        job.check()?;
+        let values = indexes
+            .iter()
+            .map(|&index| numeric_cell(&row[index]))
+            .collect::<Result<Vec<_>>>()?;
+        let value = if values.iter().any(Option::is_none) {
+            String::new()
+        } else {
+            let values = values.into_iter().flatten().collect::<Vec<_>>();
+            let result = calculate(&values)?;
+            if !result.is_finite() {
+                return Err(Error::input(format!(
+                    "{operation} produced a non-finite result"
+                )));
+            }
+            result.to_string()
+        };
+        bytes = bytes
+            .checked_add(value.len())
+            .filter(|size| *size <= MAX_TEXT_BYTES)
+            .ok_or_else(|| {
+                Error::new(
+                    localwright_core::ErrorKind::Limit,
+                    "Numeric result exceeds 32 MiB",
+                )
+            })?;
+        output.push(value);
+    }
+    table.headers.push(name);
+    for (row, value) in table.rows.iter_mut().zip(output) {
+        job.check()?;
+        row.push(value);
+    }
+    Ok(())
+}
+
 pub(crate) fn apply(mut table: Table, step: Step, job: &Job) -> Result<Table> {
     match step {
         Step::RecodeValues { column, mapping } => {
@@ -705,6 +778,127 @@ pub(crate) fn apply(mut table: Table, step: Step, job: &Job) -> Result<Table> {
             }
             filter_numeric(&mut table, &column, job, |value| {
                 value >= lower && value <= upper
+            })?;
+        }
+        Step::AddNumericColumns { left, right, name } => add_numeric_column(
+            &mut table,
+            &[left, right],
+            name,
+            job,
+            "Addition",
+            |values| Ok(values[0] + values[1]),
+        )?,
+        Step::SubtractNumericColumns { left, right, name } => add_numeric_column(
+            &mut table,
+            &[left, right],
+            name,
+            job,
+            "Subtraction",
+            |values| Ok(values[0] - values[1]),
+        )?,
+        Step::MultiplyNumericColumns { left, right, name } => add_numeric_column(
+            &mut table,
+            &[left, right],
+            name,
+            job,
+            "Multiplication",
+            |values| Ok(values[0] * values[1]),
+        )?,
+        Step::DivideNumericColumns { left, right, name } => add_numeric_column(
+            &mut table,
+            &[left, right],
+            name,
+            job,
+            "Division",
+            |values| {
+                if values[1] == 0.0 {
+                    Err(Error::input("Division by zero in numeric column"))
+                } else {
+                    Ok(values[0] / values[1])
+                }
+            },
+        )?,
+        Step::PercentChangeColumn {
+            current,
+            baseline,
+            name,
+        } => add_numeric_column(
+            &mut table,
+            &[current, baseline],
+            name,
+            job,
+            "Percent change",
+            |values| {
+                if values[1] == 0.0 {
+                    Err(Error::input("Percent change baseline cannot be zero"))
+                } else {
+                    Ok((values[0] - values[1]) / values[1] * 100.0)
+                }
+            },
+        )?,
+        Step::AbsoluteValueColumn { column, name } => add_numeric_column(
+            &mut table,
+            &[column],
+            name,
+            job,
+            "Absolute value",
+            |values| Ok(values[0].abs()),
+        )?,
+        Step::SquareRootColumn { column, name } => {
+            add_numeric_column(&mut table, &[column], name, job, "Square root", |values| {
+                if values[0] < 0.0 {
+                    Err(Error::input("Square root input cannot be negative"))
+                } else {
+                    Ok(values[0].sqrt())
+                }
+            })?
+        }
+        Step::Log10Column { column, name } => add_numeric_column(
+            &mut table,
+            &[column],
+            name,
+            job,
+            "Base-10 logarithm",
+            |values| {
+                if values[0] <= 0.0 {
+                    Err(Error::input("Base-10 logarithm input must be positive"))
+                } else {
+                    Ok(values[0].log10())
+                }
+            },
+        )?,
+        Step::RoundNumericColumn {
+            column,
+            name,
+            decimal_places,
+        } => {
+            if !(-12..=12).contains(&decimal_places) {
+                return Err(Error::input("Rounding precision must be from -12 to 12"));
+            }
+            add_numeric_column(&mut table, &[column], name, job, "Rounding", |values| {
+                if decimal_places >= 0 {
+                    format!("{:.*}", decimal_places as usize, values[0])
+                        .parse::<f64>()
+                        .map_err(|_| Error::input("Rounded result is invalid"))
+                } else {
+                    let factor = 10_f64.powi(-decimal_places);
+                    Ok((values[0] / factor).round() * factor)
+                }
+            })?;
+        }
+        Step::ClipNumericColumn {
+            column,
+            name,
+            minimum,
+            maximum,
+        } => {
+            if !minimum.is_finite() || !maximum.is_finite() || minimum > maximum {
+                return Err(Error::input(
+                    "Clip bounds must be finite and minimum must not exceed maximum",
+                ));
+            }
+            add_numeric_column(&mut table, &[column], name, job, "Clipping", |values| {
+                Ok(values[0].clamp(minimum, maximum))
             })?;
         }
         Step::ReplaceLiteral {
