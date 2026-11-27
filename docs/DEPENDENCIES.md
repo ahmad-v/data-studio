@@ -2,7 +2,11 @@
 
 Cargo manifests list the exact direct requirements. The committed lockfile records the resolved versions and registry checksums. Builds use Rust 1.95.0 from `rust-toolchain.toml`. The CI checkout action is pinned to its upstream v4.2.2 commit.
 
-A preliminary RustSec review used advisory database revision `c9f6c91a44dbad9d71742329e9df061279f9c4be`. The pinned Localwright revision uses Iced’s Tiny Skia software renderer and removes the affected `lru 0.12.5` dependency path (RUSTSEC-2026-0002 and RUSTSEC-2026-0253). Full license review, SBOM and native dependency review remain open.
+A preliminary RustSec review used advisory database revision `c9f6c91a44dbad9d71742329e9df061279f9c4be`. The pinned Localwright revision uses Iced’s Tiny Skia software renderer and removes the affected `lru 0.12.5` dependency path (RUSTSEC-2026-0002 and RUSTSEC-2026-0253). The scheduled/manual Security workflow now audits the locked Rust graph with pinned cargo-audit and stores a CycloneDX 1.5 Cargo SBOM plus a declared-license metadata inventory. The inventory requires every resolved Cargo package to declare a license or license file; it is not legal license approval and does not inspect native libraries, font assets, or model packs. Human license review and native dependency audit remain open.
+
+Ordinary checks run on Linux x64 and skip Cargo work for Markdown-only changes while retaining a stable required-check context. `integration.yml` runs the GUI/headless suite and Localwright pin check on dispatch or PR label `integration`. `native.yml` runs all five native targets on dispatch or PR label `platform-validation`. Optimized portable preview builds and artifacts moved to manually triggered `distribution.yml`. The workflow registry and manifest checks still run on documentation-only changes; the expensive release and platform workflows do not run for ordinary edits.
+
+The distribution workflow creates unsigned development previews, not installers. `packaging/config.json` still marks application identity unapproved and maintainer unset; the package script also explicitly blocks Windows EXE, Linux AppImage, and Flatpak pending reviewed packaging tools and source/runtime inputs. These unsupported combinations are not presented as successful package builds.
 
 The XLSX and Parquet stack uses Calamine 0.38.0, ZIP 9.0.5 and Arrow/Parquet 57.3.3. These pins address advisories in the previous lock candidates for Calamine, ZIP, Quick-XML, Arrow Data and Thrift. The updated spreadsheet stack requires Rust 1.88.
 
