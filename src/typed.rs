@@ -1508,21 +1508,17 @@ impl TypedTable {
                 self.columns
                     .iter()
                     .map(|column| match &column.values[row] {
-                        Scalar::String(value) => column.raw_text[row]
-                            .as_ref()
-                            .unwrap_or(value)
-                            .clone(),
-                        Scalar::Categorical(index) => column
-                            .raw_text[row]
+                        Scalar::String(value) => {
+                            column.raw_text[row].as_ref().unwrap_or(value).clone()
+                        }
+                        Scalar::Categorical(index) => column.raw_text[row]
                             .as_ref()
                             .or_else(|| column.categories.get(*index as usize))
                             .cloned()
                             .unwrap_or_default(),
-                        value => scalar_text(
-                            value,
-                            &column.categories,
-                            column.raw_text[row].as_deref(),
-                        ),
+                        value => {
+                            scalar_text(value, &column.categories, column.raw_text[row].as_deref())
+                        }
                     })
                     .collect::<Vec<_>>()
             })
