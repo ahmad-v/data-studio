@@ -19,6 +19,8 @@ use std::{
 const MAX_SCHEMA_PARAMETER_BYTES: usize = 16 * 1024;
 const MAX_METADATA_CHARS: usize = 256;
 const MAX_EXAMPLE_CHARS: usize = 128;
+const MAX_WORKSPACE_PREVIEW_CELLS: usize = 10_000;
+const MAX_WORKSPACE_TEXT_CHARS: usize = 255;
 
 /// Physical type selected for a column in a typed table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1907,6 +1909,81 @@ impl TypedTable {
         })
     }
 
+    /// Build a bounded JSON preview consumed by the native paginated table workspace.
+    pub(crate) fn workspace_report(&self, job: &Job) -> Result<serde_json::Value> {
+        let displayed_rows = self
+            .rows
+            .min((MAX_WORKSPACE_PREVIEW_CELLS / self.columns.len().max(1)).max(1));
+        let mut rows = Vec::with_capacity(displayed_rows);
+        for row in 0..displayed_rows {
+            job.check()?;
+            rows.push(
+                self.columns
+                    .iter()
+                    .map(|column| match &column.values[row] {
+                        Scalar::Null => serde_json::Value::Null,
+                        Scalar::Boolean(value) => serde_json::json!(value),
+                        Scalar::Int64(value) => serde_json::json!(value),
+                        Scalar::UInt64(value) => serde_json::json!(value),
+                        Scalar::Float64(value) => serde_json::json!(value),
+                        Scalar::Date(date) => serde_json::json!(format!(
+                            "{:04}-{:02}-{:02}",
+                            date.year, date.month, date.day
+                        )),
+                        Scalar::Time(time) => serde_json::json!(format_time(*time)),
+                        Scalar::DateTime(datetime) => {
+                            serde_json::json!(format_datetime(*datetime))
+                        }
+                        Scalar::Categorical(index) => serde_json::json!(bounded_workspace_text(
+                            column
+                                .categories
+                                .get(*index as usize)
+                                .map(String::as_str)
+                                .unwrap_or("")
+                        )),
+                        Scalar::String(value) => serde_json::json!(bounded_workspace_text(value)),
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let mut schema = Vec::with_capacity(self.columns.len());
+        for column in &self.columns {
+            let mut missing = 0usize;
+            for value in &column.values {
+                job.check()?;
+                missing += usize::from(matches!(value, Scalar::Null));
+            }
+            schema.push(serde_json::json!({
+                "name": column.name,
+                "type": column.kind,
+                "nullable": missing > 0,
+                "missing": missing,
+                "label": column.metadata.label,
+                "unit": column.metadata.unit,
+            }));
+        }
+        let report = serde_json::json!({
+            "workspace_version": 1,
+            "rows": rows,
+            "total_rows": self.rows,
+            "displayed_rows": displayed_rows,
+            "truncated": displayed_rows < self.rows,
+            "headers": self.columns.iter().map(|column| &column.name).collect::<Vec<_>>(),
+            "schema": schema,
+        });
+        if serde_json::to_vec(&report)
+            .map_err(|error| Error::input(error.to_string()))?
+            .len()
+            > 4 * 1024 * 1024
+        {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Native table preview exceeds the 4 MiB payload limit",
+            ));
+        }
+        Ok(report)
+    }
+
     pub(crate) fn preview_report(&self) -> serde_json::Value {
         let preview = (0..self.rows.min(30))
             .map(|row| {
@@ -2417,6 +2494,19 @@ fn bounded_example(value: &str) -> String {
     }
 }
 
+fn bounded_workspace_text(value: &str) -> String {
+    let mut characters = value.chars();
+    let text = characters
+        .by_ref()
+        .take(MAX_WORKSPACE_TEXT_CHARS)
+        .collect::<String>();
+    if characters.next().is_some() {
+        format!("{text}…")
+    } else {
+        text
+    }
+}
+
 fn format_time(time: Time) -> String {
     let hour = time.seconds / 3_600;
     let minute = (time.seconds / 60) % 60;
@@ -2744,6 +2834,31 @@ mod tests {
         assert_eq!(typed.schema_report()["columns"][0]["type"], "categorical");
         assert_eq!(typed.schema_report()["columns"][1]["type"], "float64");
         assert_eq!(typed.preview_report()["preview"][0][1], "1");
+    }
+
+    #[test]
+    fn workspace_report_bounds_rows_cells_and_text_and_observes_cancellation() {
+        let long_text = "x".repeat(1_024);
+        let source = crate::validate(
+            vec!["note".into()],
+            (0..MAX_WORKSPACE_PREVIEW_CELLS + 1)
+                .map(|_| vec![long_text.clone()])
+                .collect(),
+        )
+        .unwrap();
+        let typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
+        let report = typed.workspace_report(&Job::new()).unwrap();
+        assert_eq!(report["total_rows"], MAX_WORKSPACE_PREVIEW_CELLS + 1);
+        assert_eq!(report["displayed_rows"], MAX_WORKSPACE_PREVIEW_CELLS);
+        assert_eq!(report["truncated"], true);
+        assert_eq!(
+            report["rows"][0][0].as_str().unwrap().chars().count(),
+            MAX_WORKSPACE_TEXT_CHARS + 1
+        );
+
+        let cancelled = Job::new();
+        cancelled.cancel();
+        assert!(typed.workspace_report(&cancelled).is_err());
     }
 
     #[test]

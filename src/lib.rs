@@ -18,6 +18,7 @@ use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
  Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or supported flat scalar Parquet columns as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"inspect-schema",label:"Inspect typed schema",hint:r#"Optional JSON: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates per-column types and missing values without changing source data. Optional new .json report."#},
+ Operation{id:"inspect-table",label:"Inspect typed table",hint:"Load the selected CSV, TSV, XLSX worksheet or scalar Parquet table into the native paginated Data table workspace. The view is capped at 10,000 cells, cell text at 256 characters; sorting applies to the loaded preview only. Inspect types, null counts, labels and units; no output is written."},
  Operation{id:"export-typed-parquet",label:"Export typed Parquet",hint:r#"Required JSON schema options: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates primitive types, nulls and categoricals, then writes a new typed .parquet file."#},
  Operation{id:"filter",label:"Filter",hint:"Enter column=value. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs use inferred typed equality for previews and supported outputs; numeric 010 matches numeric 10. CSV/TSV output serializes nulls as empty fields."},
  Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs use typed columns for previews and supported outputs. CSV/TSV output serializes nulls as empty fields."},
@@ -1312,8 +1313,9 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     };
     let sheet = match &project {
         Some(project) => project.worksheet.as_deref(),
-        None => (matches!(r.operation.as_str(), "preview" | "export") && !r.parameter.is_empty())
-            .then_some(r.parameter.as_str()),
+        None => (matches!(r.operation.as_str(), "preview" | "export" | "inspect-table")
+            && !r.parameter.is_empty())
+        .then_some(r.parameter.as_str()),
     };
     if project.is_some()
         && sheet.is_some()
@@ -1336,6 +1338,21 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         try_typed_basic_operation(&r.operation, &r.parameter, &r.input, &r.output, &j)?
     {
         return Ok(outcome);
+    }
+    if r.operation == "inspect-table" {
+        if !r.output.as_os_str().is_empty() {
+            return Err(Error::input(
+                "Inspect typed table does not write an output file",
+            ));
+        }
+        let typed =
+            typed::TypedTable::from_path(&r.input, sheet, typed::SchemaRequest::default(), &j)?;
+        let report = serde_json::to_string(&typed.workspace_report(&j)?)?;
+        return Ok(Outcome {
+            preview: report,
+            warnings: vec!["Loaded typed values for the native table workspace. Blank cells remain null, explicit empty strings remain text, and the source file is unchanged.".into()],
+            ..Outcome::default()
+        });
     }
     if r.operation == "inspect-schema" {
         let schema_request = typed::SchemaRequest::from_json(&r.parameter)?;
@@ -2665,6 +2682,23 @@ mod tests {
         assert_eq!(table.schema_report()["columns"][3]["missing"], 1);
         assert_eq!(table.preview_report()["preview"][0][3], "");
         assert_eq!(table.preview_report()["preview"][1][3], "");
+
+        let workspace = handle(
+            Request {
+                operation: "inspect-table".into(),
+                input: input.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert!(workspace.written.is_none());
+        let report: serde_json::Value = serde_json::from_str(&workspace.preview).unwrap();
+        assert_eq!(report["workspace_version"], 1);
+        assert_eq!(report["schema"][3]["type"], "string");
+        assert_eq!(report["schema"][3]["missing"], 1);
+        assert_eq!(report["rows"][0][3], "");
+        assert!(report["rows"][1][3].is_null());
 
         let output = dir.path().join("only-blank.parquet");
         let result = handle(
