@@ -1117,12 +1117,9 @@ fn try_typed_basic_operation(
             Step::FilterNotContains { column, value } => {
                 table.filter_text(&column, &value, typed::TextMatch::NotContains, job)?
             }
-            Step::FilterContainsInsensitive { column, value } => table.filter_text(
-                &column,
-                &value,
-                typed::TextMatch::ContainsInsensitive,
-                job,
-            )?,
+            Step::FilterContainsInsensitive { column, value } => {
+                table.filter_text(&column, &value, typed::TextMatch::ContainsInsensitive, job)?
+            }
             Step::FilterStartsWith { column, value } => {
                 table.filter_text(&column, &value, typed::TextMatch::StartsWith, job)?
             }
@@ -2274,8 +2271,7 @@ mod tests {
             r#"{"column":"label","value":"A"}"#,
             &text_filtered,
         );
-        let bytes =
-            localwright_core::read_bounded(&text_filtered, 16 * 1024 * 1024).unwrap();
+        let bytes = localwright_core::read_bounded(&text_filtered, 16 * 1024 * 1024).unwrap();
         let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
         assert_eq!(
             reader.schema().field(2).data_type(),
