@@ -2,10 +2,12 @@
 
 Development source only. Launch the GUI after compiling. Choose an operation, enter local input path and a new output path where needed, set the parameter as described under the operation selector, then Run. Status and errors are shown below. Cancel requests cooperative cancellation. The draft editor accepts transcript or plain text. Choose a theme to change workbench colors and control borders. UI scale adjusts the controls from 80% to 300% and remembers your appearance choices when you reopen the app. Paths are manually typed in this increment; native dialogs and full accessibility remain pending.
 
-- `select-columns`: Enter exact comma-separated column names in output order. Optionally save to a new CSV or Parquet file. Use the first sheet for XLSX input.
+- `select-columns`: Enter exact comma-separated column names in output order. For CSV, TSV or supported flat Parquet input, preview and Parquet output use typed columns; a CSV/TSV output keeps the original text-table route. Use the first sheet for XLSX input.
 - `counts`: Counts exact cell values, including blank text. The preview reports the 30 most frequent values and the total number of distinct values.
 - `preview`: Preview CSV, XLSX or Parquet as text. For XLSX preview and export, enter the exact worksheet name or leave the parameter blank to use the first sheet.
-- `filter`: Exact-match filter; CSV or string Parquet.
+- `inspect-schema`: Leave Parameter blank to infer column types, or pass JSON such as `{"overrides":{"score":"float64"},"metadata":{"score":{"label":"Response","unit":"points"}}}`. It reports one type, missing-cell count and example value per column, plus category count for categorical columns. Override types are `boolean`, `int64`, `uint64`, `float64`, `date`, `time`, `datetime`, `categorical`, `string`, or `null`. Null means an empty or whitespace-only cell; strings such as `NA` are ordinary text. Invalid overrides fail without changing the input. An optional `.json` output writes a no-overwrite schema report. This operation builds a temporary typed columnar view; the existing transformations still use text cells.
+- `export-typed-parquet`: Use the same optional schema JSON to validate or override types, then choose a new `.parquet` output. It writes Arrow booleans, signed/unsigned integers, finite floats, dates, nanosecond times and timestamps, UTF-8 strings and dictionary-encoded categorical columns. Empty/whitespace-only values become null. Labels and units are saved as Arrow field metadata. Offset-aware datetimes are normalized to UTC; mixed aware and naive values in one column are rejected. The report preview describes the schema written. The source file remains unchanged.
+- `filter`: Enter `column=value`. With CSV, TSV or supported flat Parquet input, preview and Parquet output use the inferred column type, so numeric `010` matches numeric 10 and blank/whitespace values are null. CSV/TSV output retains the legacy exact-text match.
 - `filter-contains` and `filter-not-contains`: JSON parameters name a column and nonempty literal substring. Matching is case-sensitive and does not interpret the search text as a pattern.
 - `head-rows` and `tail-rows`: JSON parameter `{"rows":N}` keeps the first or last N rows, preserving source order. N is limited to 500,000.
 - `drop-duplicates-by-columns`: JSON parameter `{"columns":["email"]}` compares exact cell text in the chosen key columns and keeps the first occurrence.
@@ -27,7 +29,7 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `fill-forward` and `fill-backward`: JSON parameter `{"column":"group"}` fills blanks from the nearest preceding or following nonblank cell. Leading or trailing blanks without a source value remain blank.
 - `drop-empty-columns`: Removes columns that contain only blank or whitespace-only cells. It errors if no nonempty column remains.
 - `reverse-rows`: Reverses row order and preserves headers and cell text.
-- `sort`: Enter the exact column name. Rows with equal values retain their order. Values sort as text, so `10` precedes `2`.
+- `sort`: Enter the exact column name. Preview and Parquet output use stable typed order for CSV, TSV or supported flat Parquet inputs, with nulls last; CSV/TSV output retains the stable text sort where `10` precedes `2`.
 - `deduplicate`: Keep the first occurrence of each full row. Leave the parameter blank. Both operations can preview rows or export to a new CSV, TSV or Parquet file.
 - `mask-column`: Enter the exact column name to replace its nonempty values with `[MASKED]`. Preview the result or export a new CSV, TSV or Parquet file. Review other columns and blank patterns before sharing masked data.
 - `summary`: Numeric column n, missing, mean, sample SD, min/max.
@@ -38,11 +40,11 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `line-chart`: Enter two numeric column names separated by a comma. Write a new monochrome SVG. Complete pairs are connected in table order, including across missing rows.
 - `scatter`: Monochrome scatter SVG, 800 x 600.
 
-Limitations: In-memory text table only; no inferred types, large-data virtualization, general formula language, project editing, undo, batch runs, other formats, authoritative palettes or full scientific export. Inferential routes are limited to the methods documented below; assumptions are not diagnosed, p-values are unadjusted, and no multiple-testing correction or causal inference is provided. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.
+Limitations: General-purpose operations still use the legacy in-memory string table. Version 1 projects can opt into a bounded typed Parquet pipeline with schema inference/overrides, comparisons, numeric expressions, renaming, typed inner joins and row/column selection, as documented below. A virtualized editable table, general expression language, project editor, undo, batch runs, other formats, authoritative palettes and full scientific export remain open. Inferential routes are limited to the methods documented below; assumptions are not diagnosed, p-values are unadjusted, and no multiple-testing correction or causal inference is provided. XLSX ZIP expansion and range allocation occur in the dependency before the cell limit; hostile workbooks are not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; it is not proof of spreadsheet safety.
 
 No output overwrite is allowed. No accounts, ads, telemetry or runtime downloads are intended. Do not use this unverified snapshot with valuable or hostile input. Citation and donations are voluntary.
 
-Parquet import supports flat, uncompressed UTF-8 columns. Nulls become blank text. Numeric, nested, and compressed input returns an error. Preview, filter, numeric summary, scatter, and export all accept this input through the same table loader.
+Parquet import supports flat, uncompressed scalar columns, including booleans, numeric primitives, dates, times, timestamps and UTF-8 dictionary values. Nulls become blank text in the legacy transformation table. Nested and binary columns, compressed Parquet pages and files beyond the declared/decoded byte limits are rejected. Typed CSV/TSV inspection, export and typed projects parse delimited records directly into columnar typed values in two bounded passes; they do not first construct the legacy row-oriented string table. XLSX and Parquet typed inputs still use their existing decoder before typed conversion. `export-typed-parquet` writes the validated schema as native Arrow physical types; legacy transforms still operate on text values.
 
 For tab-separated text, use the .tsv extension on input or output. Quoted fields can contain tabs. The same size, header and formula-guard rules apply as for CSV. TSV passed the Linux round-trip fixture.
 
@@ -62,7 +64,45 @@ Create a UTF-8 JSON file with schema version 1 and up to 32 ordered steps. The e
 }
 ```
 
-Use `mask-column` with a `column` field to include a fixed mask step. The optional top-level `worksheet` selects an exact XLSX sheet name. Set the table as Input and the project path as Parameter, or use `--cli run-project input.csv result.tsv project.json`. An empty output path previews the result. An invalid step reports its number and leaves the output absent. Keep project files local if filter values contain sensitive information. The project engine interprets only these operations and uses the same bounded text-table loader as individual routes.
+Use `mask-column` with a `column` field to include a fixed mask step. The optional top-level `worksheet` selects an exact XLSX sheet name. Set the table as Input and the project path as Parameter, or use `--cli run-project input.csv result.tsv project.json`. An empty output path previews the result. An invalid step reports its number and leaves the output absent. Keep project files local if filter values contain sensitive information. Projects without `typed_schema` use the existing text-table pipeline.
+
+To keep schema and nulls through a supported transformation subset, add `typed_schema` to a version 1 project and save results as Parquet:
+
+```json
+{
+  "schema_version": 1,
+  "typed_schema": {
+    "overrides": {"id": "int64", "group": "categorical"},
+    "metadata": {"score": {"label": "Response", "unit": "points"}}
+  },
+  "steps": [
+    {"operation": "filter", "column": "score", "value": "10"},
+    {"operation": "sort", "column": "id"},
+    {"operation": "select-columns", "columns": ["id", "group", "score"]},
+    {"operation": "drop-rows-any-missing"}
+  ]
+}
+```
+
+The typed subset supports `filter`, `filter-compare`, `derive-numeric-column`, `rename-column`, `typed-inner-join`, `group-sum`, `group-mean`, `sort`, `select-columns`, `drop-missing`, `drop-rows-any-missing`, `head-rows`, `tail-rows` and `reverse-rows`. Filter literals are parsed using the selected column type. `filter-compare` accepts `eq`, `ne`, `lt`, `lte`, `gt` and `gte`. Null equals a missing literal only with `eq`; other comparisons exclude null rows. Sorts use typed ordering with nulls last and preserve input order for ties. Categorical values sort by their text labels. Renaming preserves type and metadata. A typed inner join reads a second supported table input and requires `right_path`, `left_key`, `right_key` and `right_schema`; relative paths resolve from the project JSON file. The right key must have the same declared/inferred type as the left key, null keys never match, categorical keys compare by label, duplicate keys expand to all matching pairs, and right-side non-key columns get a `right.` prefix. `group-sum` and `group-mean` take `group_column` and `value_column`, output the key and a `sum_<value_column>` or `mean_<value_column>` float64 column, and preserve key type and metadata plus the value unit. Null keys form one group; null numeric values are skipped; groups with no numeric values have a null aggregate. Integer inputs outside the exact float64 range and non-finite aggregate results fail. Groups retain first-seen order. Incompatible or colliding columns fail before output is written. An incompatible filter or mixed timezone-aware and naive datetime sort fails the project without writing a partial output.
+
+A numeric expression can reference numeric columns and finite literals:
+
+```json
+{
+  "operation": "derive-numeric-column",
+  "name": "total",
+  "label": "Total response",
+  "unit": "points",
+  "expression": {
+    "op": "add",
+    "left": {"op": "column", "name": "score"},
+    "right": {"op": "literal", "value": 2.0}
+  }
+}
+```
+
+Expression nodes support `add`, `subtract`, `multiply`, `divide`, `negate`, `absolute`, `square_root`, `log10`, `round` and `clip`. `round` takes `decimal_places` from -12 through 12; `clip` takes finite ordered `minimum` and `maximum` bounds. Expressions are limited to depth 16 and 64 nodes. Results are float64, arithmetic nulls propagate, and division by zero, invalid domains, overflow and non-finite values fail with the source row number. Integer inputs must be within the exactly representable float64 range (absolute value at most 2^53); this prevents silently rounded integer values. Output is written only after the whole project succeeds. Other transformations currently return a step-specific unsupported-operation error in typed mode. Typed Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units; the source remains untouched.
 
 ## Join two tables
 
@@ -96,7 +136,7 @@ All numeric routes reject nonfinite or malformed observed values, state their me
 
 - `drop-missing`. Enter the exact column name to remove rows whose selected cell is empty or contains only whitespace.
 - `fill-missing`. Enter `column=value` to replace empty and whitespace-only cells with literal text.
-- `rename-column`. Enter `old=new`. The new name must contain text and be unique.
+- `rename-column`: Enter `old=new`. The new name must contain text and be unique. Preview and Parquet output use typed columns for CSV/TSV/supported flat Parquet input; CSV/TSV output retains the text-table behavior.
 
 All three operations can be used in a project. Use a `column` field and, where applicable, `value` for fill or `name` for rename.
 

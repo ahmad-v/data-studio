@@ -9,7 +9,9 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | rename-column | Rename a table header | Linux fixture-tested |
 | select-columns | Select and reorder table columns | Linux fixture-tested |
 | counts | Exact value counts for a column | Linux fixture-tested |
-| preview | CSV, TSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview | Linux fixture-tested |
+| preview | CSV, TSV, named or first XLSX sheet, or supported flat scalar Parquet cast to text | Linux fixture-tested |
+| inspect-schema | Infer or explicitly validate a columnar schema; report types, nulls, categorical dictionary counts, labels and units without modifying input; CSV/TSV parses directly to typed columns | Linux unit and route fixtures passed; five-target hosted verification pending |
+| export-typed-parquet | Write a validated or inferred typed Arrow schema, including nulls, temporal types, category dictionaries and label/unit metadata | Linux round-trip/rejection fixtures passed; hosted native matrix pending |
 | filter | Exact-match filter; CSV or string Parquet | Linux fixture-tested |
 | sort | Stable ascending text sort by one column | Linux fixture-tested |
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
@@ -18,7 +20,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | left-join | Left outer join with duplicate-key expansion and blank-key nonmatching | Linux fixture-tested |
 | right-join | Right outer join preserving right input order and every unmatched row | Linux fixture-tested |
 | full-join | Full outer join preserving unmatched rows from both tables | Linux fixture-tested |
-| run-project | Replay declared table transformations from a versioned project | Linux fixture and CLI-tested |
+| run-project | Replay text projects unchanged; optional `typed_schema` enables typed comparisons, bounded numeric expressions, rename, type-preserving inner join, typed group sum/mean, sorting, selection and row windows while preserving Parquet schema, nulls, categories and metadata; CSV/TSV inputs parse directly to typed columns | Tests cover comparisons, expression errors, metadata, schema-preserving rename/join/aggregation, null semantics and failure isolation; hosted verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
@@ -85,6 +87,6 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 
 ## Known gaps
 
-In-memory text table only; no inferred or preserved typed schema, large-data virtualization, general formula language, regex transforms, multi-key/duplicate-aggregating pivot, project editor, undo, batch runs, other formats, authoritative palettes or full scientific export. Explicit numeric derivation and number/integer/boolean conversion routes normalize results as text without changing the table's string schema. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.
+Most transformations still run on the legacy in-memory string table. Versioned projects can opt into a typed columnar pipeline with schema-aware comparisons, bounded arithmetic expression columns, stable typed sorting, column selection and row windows/removal; the pipeline preserves Arrow values, nulls, categorical dictionaries, labels and units through typed Parquet output. Joins, aggregation, typed editing and broad standalone transformation migration remain open. Large-data virtualization, regex transforms, multi-key/duplicate-aggregating pivots, project editor, undo, batch runs, other formats, authoritative palettes and full scientific export remain open. XLSX ZIP expansion and range allocation occur in the dependency before cell limit; hostile workbooks are not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; it is not a proof of spreadsheet safety.
 
 Hosted matrix, device, and packaging verification remain open. See [verification evidence](VERIFICATION.md) and [dependency review](DEPENDENCIES.md).

@@ -1,0 +1,68 @@
+name: Integration
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'integration')
+    name: Linux integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Verify Localwright compatibility pin
+        run: python3 scripts/check_localwright_pin.py
+      - name: Install GUI and virtual display prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev xvfb
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}-integration-debug-gui-headless-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}-integration-debug-gui-headless-
+      - name: Verify formatting, manifests and capability registry
+        run: |
+          cargo fmt --all -- --check
+          cargo metadata --locked --format-version 1 --no-deps >/dev/null
+          python3 -m json.tool docs/capabilities.json >/dev/null
+      - name: Run GUI-feature tests and compile the native application
+        run: |
+          cargo test --locked
+          cargo build --locked
+      - name: Smoke-test native GUI startup in a virtual display
+        run: |
+          set +e
+          timeout --signal=TERM 10s xvfb-run -a target/debug/data-studio
+          result=$?
+          set -e
+          if [[ "$result" != 124 && "$result" != 143 && "$result" != 0 ]]; then
+            exit "$result"
+          fi
+      - name: Run headless suite and CLI smoke test
+        run: |
+          cargo test --locked --no-default-features
+          cargo run --locked --no-default-features -- --cli --help

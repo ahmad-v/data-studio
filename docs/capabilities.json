@@ -11,7 +11,7 @@
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux integration fixture passed"
+      "fixture_status": "Linux text route fixture passed; added typed Parquet output and preview coverage"
     },
     {
       "operation": "fill-missing",
@@ -24,21 +24,21 @@
     },
     {
       "operation": "rename-column",
-      "description": "Rename a table header",
+      "description": "Rename a table header; typed preview/Parquet route for supported CSV, TSV and flat Parquet input",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux integration fixture passed"
+      "fixture_status": "Linux text route fixture passed; typed Parquet schema-preservation coverage added"
     },
     {
       "operation": "select-columns",
-      "description": "Select and reorder table columns",
+      "description": "Select and reorder columns; typed preview/Parquet route for supported CSV, TSV and flat Parquet input",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux x86_64 fixtures passed"
+      "fixture_status": "Linux x86_64 legacy fixtures passed; typed preview/Parquet selection route covered"
     },
     {
       "operation": "counts",
@@ -51,28 +51,46 @@
     },
     {
       "operation": "preview",
-      "description": "CSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview",
+      "description": "CSV, named or first XLSX sheet, or supported flat scalar Parquet preview cast to text",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "not run"
+      "fixture_status": "Legacy exact-text output and typed preview/Parquet equality route fixtures added; hosted verification pending"
+    },
+    {
+      "operation": "inspect-schema",
+      "description": "Columnar typed schema inference, explicit type overrides, null counts, category dictionary metadata, labels and units; source data unchanged",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Typed inference and user-route fixtures passed in the Linux test suite; CSV/TSV typed routes decode directly into columnar values without the legacy row-string table; hosted native matrix pending"
+    },
+    {
+      "operation": "export-typed-parquet",
+      "description": "Write typed Arrow/Parquet scalar columns, categorical dictionaries, nulls, labels and units from validated inferred or explicit schema",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux round-trip and rejection fixtures passed for scalar types, nulls, categorical dictionary, UTC timestamp normalization, metadata, and no-overwrite; CSV/TSV inputs decode directly into typed columns; hosted verification pending"
     },
     {
       "operation": "filter",
-      "description": "Exact-match filter; CSV or string Parquet",
+      "description": "Exact text filter for text output, with typed equality preview/Parquet route for supported CSV, TSV and flat Parquet input",
       "status": "implemented-unverified",
       "targets": [],
-      "fixture_status": "not run"
+      "fixture_status": "Legacy exact-text output and typed preview/Parquet equality route fixtures added; hosted verification pending"
     },
     {
       "operation": "sort",
-      "description": "Stable ascending text sort by one column",
+      "description": "Stable text sort for text output, with typed ascending preview/Parquet route for supported CSV, TSV and flat Parquet input",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux x86_64 fixtures passed"
+      "fixture_status": "Linux x86_64 text fixtures passed; typed numeric sort and null-last Parquet route covered"
     },
     {
       "operation": "deduplicate",
@@ -130,12 +148,12 @@
     },
     {
       "operation": "run-project",
-      "description": "Replay an ordered version 1 data project against a local table",
+      "description": "Replay version 1 text projects or typed pipelines with comparisons, bounded numeric expressions, schema-preserving rename, type-checked inner joins, typed grouped sum/mean and Arrow-preserving Parquet output",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux x86_64 replay, CLI export and failed-step isolation passed"
+      "fixture_status": "Legacy Linux x86_64 replay and CLI export passed; CSV/TSV typed project imports decode directly to typed columns; typed numeric expressions, comparisons, null propagation, metadata round-trip, stable sorting, type-preserving rename/join, grouped sum/mean and aggregation overflow fixtures are implemented; hosted verification pending"
     },
     {
       "operation": "select-sql",
@@ -367,21 +385,21 @@
     },
     {
       "operation": "group-sum",
-      "description": "Grouped sum over finite numeric values",
+      "description": "Grouped sum over finite numeric values in legacy text operations and typed projects",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Route and project fixtures verify blank handling and exact groups"
+      "fixture_status": "Route fixtures verify exact text groups; typed project fixtures verify typed keys, null groups, metadata, numeric nulls and overflow handling"
     },
     {
       "operation": "group-mean",
-      "description": "Grouped arithmetic mean over finite numeric values",
+      "description": "Grouped arithmetic mean over finite numeric values in legacy text operations and typed projects",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Route and project fixtures verify blank handling and exact groups"
+      "fixture_status": "Route fixtures verify exact text groups; typed project fixtures verify typed keys, null groups, metadata and all-missing groups"
     },
     {
       "operation": "filter-contains",

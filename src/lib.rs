@@ -4,6 +4,7 @@ mod project;
 mod sql;
 mod statistics;
 mod transform;
+mod typed;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx};
@@ -15,10 +16,12 @@ use parquet::{
 use project::{Project, Step};
 use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
- Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
- Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv, .tsv or .parquet output."},
- Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Optional new CSV or Parquet output."},
- Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Stable ascending text order. Optional CSV, TSV or Parquet output."},
+ Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or supported flat scalar Parquet columns as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
+ Operation{id:"inspect-schema",label:"Inspect typed schema",hint:r#"Optional JSON: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates per-column types and missing values without changing source data. Optional new .json report."#},
+ Operation{id:"export-typed-parquet",label:"Export typed Parquet",hint:r#"Required JSON schema options: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates primitive types, nulls and categoricals, then writes a new typed .parquet file."#},
+ Operation{id:"filter",label:"Filter",hint:"Enter column=value. Preview and new Parquet output use inferred typed equality; CSV/TSV output keeps exact text matching."},
+ Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Preview and Parquet output retain inferred column types; CSV/TSV output keeps the legacy text path."},
+ Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Preview and Parquet output use stable typed order; CSV/TSV output keeps stable text order."},
  Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
  Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
  Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Exact nonblank text keys. Optional new CSV, TSV or Parquet output."#},
@@ -27,8 +30,8 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"full-join",label:"Full outer join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched rows from both tables; missing-side columns are blank."#},
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
- Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank."},
- Operation{id:"run-project",label:"Run data project",hint:"Enter the project JSON path. Preview a local table or write it to a new CSV, TSV or Parquet file."},
+ Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. Preview and Parquet output preserve inferred column types; CSV/TSV output keeps the legacy text path."},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware comparisons, stable sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), and typed `group-sum`/`group-mean`; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
@@ -105,6 +108,16 @@ fn err(e: impl std::fmt::Display) -> Error {
     Error::input(e.to_string())
 }
 pub(crate) fn validate(headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<Table> {
+    validate_headers(&headers)?;
+    if rows.len().saturating_mul(headers.len()) > MAX_CELLS
+        || rows.iter().any(|r| r.len() != headers.len())
+    {
+        return Err(Error::input("Cell limit or inconsistent row width"));
+    }
+    Ok(Table { headers, rows })
+}
+
+pub(crate) fn validate_headers(headers: &[String]) -> Result<()> {
     let mut seen = std::collections::HashSet::new();
     if headers.is_empty()
         || headers.len() > MAX_COLS
@@ -116,13 +129,36 @@ pub(crate) fn validate(headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<T
             "Headers must be unique and nonempty (maximum 256)",
         ));
     }
-    if rows.len().saturating_mul(headers.len()) > MAX_CELLS
-        || rows.iter().any(|r| r.len() != headers.len())
-    {
-        return Err(Error::input("Cell limit or inconsistent row width"));
-    }
-    Ok(Table { headers, rows })
+    Ok(())
 }
+fn supported_parquet_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Dictionary(key, value) => {
+            key.as_ref() == &DataType::Int32 && value.as_ref() == &DataType::Utf8
+        }
+        scalar => matches!(
+            scalar,
+            DataType::Utf8
+                | DataType::Boolean
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Timestamp(_, _)
+        ),
+    }
+}
+
 fn load_parquet(bytes: Vec<u8>, job: &Job) -> Result<Table> {
     const MAX_ROW_GROUPS: usize = 256;
     const MAX_DECODED_BYTES: u64 = 32 * 1024 * 1024;
@@ -135,10 +171,10 @@ fn load_parquet(bytes: Vec<u8>, job: &Job) -> Result<Table> {
     }
     if fields
         .iter()
-        .any(|field| field.data_type() != &DataType::Utf8)
+        .any(|field| !supported_parquet_type(field.data_type()))
     {
         return Err(Error::input(
-            "Parquet import supports flat UTF-8 string columns only",
+            "Parquet import supports flat scalar columns only; nested and binary columns are rejected",
         ));
     }
     let headers = fields
@@ -183,14 +219,18 @@ fn load_parquet(bytes: Vec<u8>, job: &Job) -> Result<Table> {
         if rows.len().saturating_add(batch.num_rows()) > expected_rows {
             return Err(Error::input("Parquet data exceeds declared row count"));
         }
-        let columns = batch
+        let converted = batch
             .columns()
+            .iter()
+            .map(|array| arrow_cast::cast(array.as_ref(), &DataType::Utf8).map_err(err))
+            .collect::<Result<Vec<_>>>()?;
+        let columns = converted
             .iter()
             .map(|array| {
                 array
                     .as_any()
                     .downcast_ref::<StringArray>()
-                    .ok_or_else(|| Error::input("Unexpected Parquet column type"))
+                    .ok_or_else(|| Error::input("Arrow scalar conversion did not yield text"))
             })
             .collect::<Result<Vec<_>>>()?;
         for index in 0..batch.num_rows() {
@@ -396,6 +436,13 @@ fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
         | Step::FillBackward { .. }
         | Step::DropEmptyColumns { .. }
         | Step::ReverseRows { .. }) => return transform::apply(table, step, job),
+        Step::FilterCompare { .. }
+        | Step::DeriveNumericColumn { .. }
+        | Step::TypedInnerJoin { .. } => {
+            return Err(Error::input(
+                "Typed project steps require a project with typed_schema",
+            ))
+        }
         Step::SelectColumns { columns } => {
             return select_columns(table, columns.iter().map(String::as_str), job)
         }
@@ -982,6 +1029,60 @@ fn export(t: &Table, p: &Path, j: &Job) -> Result<()> {
         _ => Err(Error::input("Output must be .csv, .tsv or .parquet")),
     }
 }
+
+fn try_typed_basic_operation(
+    operation: &str,
+    parameter: &str,
+    input: &Path,
+    output: &Path,
+    job: &Job,
+) -> Result<Option<Outcome>> {
+    if !matches!(
+        operation,
+        "filter" | "sort" | "select-columns" | "rename-column"
+    ) {
+        return Ok(None);
+    }
+    let input_kind = input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    if !matches!(input_kind.as_deref(), Some("csv" | "tsv" | "parquet")) {
+        return Ok(None);
+    }
+    let writes_parquet = output
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("parquet"));
+    if !output.as_os_str().is_empty() && !writes_parquet {
+        return Ok(None);
+    }
+    let Some(step) = request_step(operation, parameter)? else {
+        return Ok(None);
+    };
+    let mut table =
+        typed::TypedTable::from_path(input, None, typed::SchemaRequest::default(), job)?;
+    match step {
+        Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
+        Step::Sort { column } => table.sort_by(&column, job)?,
+        Step::SelectColumns { columns } => table.select_columns(&columns, job)?,
+        Step::RenameColumn { column, name } => table.rename_column(&column, name)?,
+        _ => return Ok(None),
+    }
+    let mut written = None;
+    if writes_parquet {
+        table.write_parquet(output, job)?;
+        written = Some(output.to_path_buf());
+    }
+    let preview = serde_json::to_string_pretty(&table.preview_report())?;
+    Ok(Some(Outcome {
+        preview: preview.chars().take(24000).collect(),
+        written,
+        warnings: vec!["Applied the operation to typed columns. CSV/TSV cells are decoded directly into typed values; blank and whitespace-only values are null. Parquet input uses the existing supported-scalar decoder before type inference, so original dictionary and field metadata are not restored.".into()],
+        ..Outcome::default()
+    }))
+}
+
 pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     let project = if r.operation == "run-project" {
         Some(Project::open(Path::new(&r.parameter))?)
@@ -1005,9 +1106,92 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             "Project worksheet selection requires XLSX input",
         ));
     }
+    if let Some(outcome) =
+        try_typed_basic_operation(&r.operation, &r.parameter, &r.input, &r.output, &j)?
+    {
+        return Ok(outcome);
+    }
+    if r.operation == "inspect-schema" {
+        let schema_request = typed::SchemaRequest::from_json(&r.parameter)?;
+        let typed = typed::TypedTable::from_path(&r.input, sheet, schema_request, &j)?;
+        let report = serde_json::to_string_pretty(&typed.schema_report())?;
+        let mut written = None;
+        if !r.output.as_os_str().is_empty() {
+            if !r
+                .output
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+            {
+                return Err(Error::input("Schema reports require a .json output"));
+            }
+            j.check()?;
+            write_bytes(&r.output, report.as_bytes())?;
+            written = Some(r.output);
+        }
+        return Ok(Outcome {
+            preview: report,
+            written,
+            warnings: vec!["Delimited CSV/TSV inputs are parsed directly into typed columns. Other supported formats use the existing decoder before typed conversion. Whitespace-only cells are null; other text is preserved, and the source remains unchanged.".into()],
+            ..Outcome::default()
+        });
+    }
+    if r.operation == "export-typed-parquet" {
+        if !r
+            .output
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("parquet"))
+        {
+            return Err(Error::input("Typed data requires a new .parquet output"));
+        }
+        let schema_request = typed::SchemaRequest::from_json(&r.parameter)?;
+        let table = typed::TypedTable::from_path(&r.input, sheet, schema_request, &j)?;
+        table.write_parquet(&r.output, &j)?;
+        let report = serde_json::to_string_pretty(&table.schema_report())?;
+        return Ok(Outcome {
+            preview: report,
+            written: Some(r.output),
+            warnings: vec!["Parquet columns carry inferred or explicitly validated Arrow types. Offset-aware datetimes normalize to UTC; columns that mix aware and naive timestamps are rejected. Labels and units are stored as field metadata. The source remains unchanged.".into()],
+            ..Outcome::default()
+        });
+    }
+    if r.operation == "run-project" {
+        if let Some(schema_request) = project.as_ref().and_then(Project::typed_schema).cloned() {
+            if !r.output.as_os_str().is_empty()
+                && !r
+                    .output
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("parquet"))
+            {
+                return Err(Error::input(
+                    "Typed project results require a new .parquet output",
+                ));
+            }
+            let typed = typed::TypedTable::from_path(&r.input, sheet, schema_request, &j)?;
+            let (typed, steps) = project
+                .expect("a typed schema is read from a project")
+                .run_typed(typed, &j)?;
+            let mut written = None;
+            if !r.output.as_os_str().is_empty() {
+                typed.write_parquet(&r.output, &j)?;
+                written = Some(r.output);
+            }
+            let preview = serde_json::to_string_pretty(&typed.preview_report())?;
+            return Ok(Outcome {
+                preview: preview.chars().take(24000).collect(),
+                written,
+                warnings: vec![format!(
+                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed group-sum/group-mean preserve key type and metadata, group null keys together, omit null values and return null for all-missing groups. Typed pipelines support filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, drop-rows-any-missing, head-rows, tail-rows and reverse-rows. Joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
+                )],
+                ..Outcome::default()
+            });
+        }
+    }
     let mut t = load(&r.input, sheet, &j)?;
     let mut written = None;
-    let mut warnings = vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()];
+    let mut warnings = vec!["Transformation operations still use text cells: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import casts supported flat uncompressed scalar columns to text and represents nulls as blanks.".into()];
     let preview = match r.operation.as_str() {
         "counts" => value_counts(&t, column(&t, &r.parameter)?, &j)?,
         "summary" => summary(&t, column(&t, &r.parameter)?, &j)?,
@@ -1463,6 +1647,609 @@ mod tests {
     }
 
     #[test]
+    fn typed_project_filters_and_sorts_by_schema_and_writes_typed_parquet() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("typed-input.csv");
+        let project_path = dir.path().join("typed-project.json");
+        let output = dir.path().join("typed-result.parquet");
+        let original = concat!(
+            "id,score,group\n",
+            "10,2,first\n",
+            "2,10,second\n",
+            "1,10,first\n",
+            "3,,missing\n",
+        );
+        std::fs::write(&input, original).unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {
+                    "overrides": {"group": "categorical"},
+                    "metadata": {"score": {"label": "Response", "unit": "points"}}
+                },
+                "steps": [
+                    {"operation": "filter", "column": "score", "value": "010"},
+                    {"operation": "sort", "column": "id"},
+                    {"operation": "select-columns", "columns": ["id", "score", "group"]}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let result = handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(result.written, Some(output.clone()));
+        assert!(result.preview.contains("\"rows\": 2"));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("typed project steps")));
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let schema = reader.schema();
+        assert_eq!(schema.field(0).name(), "id");
+        assert_eq!(schema.field(0).data_type(), &DataType::Int64);
+        assert_eq!(schema.field(1).data_type(), &DataType::Int64);
+        assert_eq!(
+            schema.field(2).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
+        assert_eq!(schema.field(1).metadata()["localwright.label"], "Response");
+        assert_eq!(schema.field(1).metadata()["localwright.unit"], "points");
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[1, 2]);
+        let scores = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(scores.values(), &[10, 10]);
+    }
+
+    #[test]
+    fn typed_project_rejects_incompatible_filter_without_creating_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("typed-input.csv");
+        let project_path = dir.path().join("typed-project.json");
+        let output = dir.path().join("typed-result.parquet");
+        std::fs::write(&input, "score\n10\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {"overrides": {"score": "int64"}},
+                "steps": [{"operation": "filter", "column": "score", "value": "ten"}]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("incompatible with column"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn typed_project_derives_numeric_expression_and_filters_with_typed_comparison() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("expression-input.csv");
+        let project_path = dir.path().join("expression-project.json");
+        let output = dir.path().join("expression-result.parquet");
+        let original = concat!(
+            "id,base,delta\n",
+            "3,2,4\n",
+            "2,10,1\n",
+            "1,,2\n",
+            "4,20,0\n",
+        );
+        std::fs::write(&input, original).unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {
+                    "overrides": {"base": "float64", "delta": "float64"}
+                },
+                "steps": [
+                    {
+                        "operation": "derive-numeric-column",
+                        "name": "total",
+                        "label": "Total response",
+                        "unit": "points",
+                        "expression": {
+                            "op": "add",
+                            "left": {"op": "column", "name": "base"},
+                            "right": {"op": "column", "name": "delta"}
+                        }
+                    },
+                    {
+                        "operation": "filter-compare",
+                        "column": "total",
+                        "comparison": "gte",
+                        "value": "10"
+                    },
+                    {"operation": "sort", "column": "id"},
+                    {"operation": "select-columns", "columns": ["id", "total"]}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let result = handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(result.written, Some(output.clone()));
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let schema = reader.schema();
+        assert_eq!(schema.field(0).data_type(), &DataType::Int64);
+        assert_eq!(schema.field(1).data_type(), &DataType::Float64);
+        assert_eq!(
+            schema.field(1).metadata()["localwright.label"],
+            "Total response"
+        );
+        assert_eq!(schema.field(1).metadata()["localwright.unit"], "points");
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        let totals = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::Float64Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[2, 4]);
+        assert_eq!(totals.values(), &[11.0, 20.0]);
+    }
+
+    #[test]
+    fn typed_project_renames_and_inner_joins_preserving_types_nulls_and_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("left.csv");
+        let right = dir.path().join("right.csv");
+        let project_path = dir.path().join("project.json");
+        let output = dir.path().join("joined.parquet");
+        std::fs::write(&input, "id,score\n2,1.5\n3,\n,9\n").unwrap();
+        std::fs::write(&right, "key,site\n2,north\n2,south\n3,west\n,unknown\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {
+                    "overrides": {"id": "int64", "score": "float64"},
+                    "metadata": {"score": {"label": "Response", "unit": "points"}}
+                },
+                "steps": [
+                    {"operation": "rename-column", "column": "score", "name": "response"},
+                    {
+                        "operation": "typed-inner-join",
+                        "right_path": "right.csv",
+                        "left_key": "id",
+                        "right_key": "key",
+                        "right_schema": {"overrides": {"key": "int64", "site": "categorical"}}
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+        handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let schema = reader.schema();
+        assert_eq!(schema.field(0).name(), "id");
+        assert_eq!(schema.field(0).data_type(), &DataType::Int64);
+        assert_eq!(schema.field(1).name(), "response");
+        assert_eq!(schema.field(1).data_type(), &DataType::Float64);
+        assert_eq!(schema.field(1).metadata()["localwright.label"], "Response");
+        assert_eq!(schema.field(1).metadata()["localwright.unit"], "points");
+        assert_eq!(schema.field(2).name(), "right.site");
+        assert_eq!(
+            schema.field(2).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[2, 2, 3]);
+        let scores = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::Float64Array>()
+            .unwrap();
+        assert_eq!(scores.value(0), 1.5);
+        assert_eq!(scores.value(1), 1.5);
+        assert!(scores.is_null(2));
+    }
+
+    #[test]
+    fn typed_join_rejects_incompatible_keys_without_creating_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("left.csv");
+        let right = dir.path().join("right.csv");
+        let project_path = dir.path().join("project.json");
+        let output = dir.path().join("joined.parquet");
+        std::fs::write(&input, "id\n2\n").unwrap();
+        std::fs::write(&right, "key\n2\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {"overrides": {"id": "int64"}},
+                "steps": [{
+                    "operation": "typed-inner-join",
+                    "right_path": "right.csv",
+                    "left_key": "id",
+                    "right_key": "key",
+                    "right_schema": {"overrides": {"key": "string"}}
+                }]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("same typed column type"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn typed_project_group_sum_and_mean_preserve_group_schema_and_null_semantics() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("grouped.csv");
+        std::fs::write(&input, "group,value\nA,1\nB,4\nA,3\n,9\nC,\nC, \n").unwrap();
+
+        for (operation, aggregate_name, expected) in [
+            ("group-sum", "sum_value", [4.0, 4.0, 9.0, 0.0]),
+            ("group-mean", "mean_value", [2.0, 4.0, 9.0, 0.0]),
+        ] {
+            let project_path = dir.path().join(format!("{operation}.json"));
+            let output = dir.path().join(format!("{operation}.parquet"));
+            std::fs::write(
+                &project_path,
+                format!(
+                    r#"{{
+                        "schema_version": 1,
+                        "typed_schema": {{
+                            "overrides": {{"group": "categorical", "value": "int64"}},
+                            "metadata": {{
+                                "group": {{"label": "Study group"}},
+                                "value": {{"unit": "items"}}
+                            }}
+                        }},
+                        "steps": [{{
+                            "operation": "{operation}",
+                            "group_column": "group",
+                            "value_column": "value"
+                        }}]
+                    }}"#
+                ),
+            )
+            .unwrap();
+            handle(
+                Request {
+                    operation: "run-project".into(),
+                    input: input.clone(),
+                    output: output.clone(),
+                    parameter: project_path.to_string_lossy().into_owned(),
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+            .unwrap();
+
+            let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+            let reader =
+                ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+            let schema = reader.schema();
+            assert_eq!(schema.field(0).name(), "group");
+            assert_eq!(
+                schema.field(0).data_type(),
+                &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+            );
+            assert_eq!(
+                schema.field(0).metadata()["localwright.label"],
+                "Study group"
+            );
+            assert_eq!(schema.field(1).name(), aggregate_name);
+            assert_eq!(schema.field(1).data_type(), &DataType::Float64);
+            assert_eq!(schema.field(1).metadata()["localwright.unit"], "items");
+            let mut batches = reader.build().unwrap();
+            let batch = batches.next().unwrap().unwrap();
+            assert_eq!(batch.num_rows(), 4);
+            assert!(batch.column(0).is_null(2)); // Missing keys form one group.
+            let aggregate = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<arrow_array::Float64Array>()
+                .unwrap();
+            assert_eq!(aggregate.value(0), expected[0]);
+            assert_eq!(aggregate.value(1), expected[1]);
+            assert_eq!(aggregate.value(2), expected[2]);
+            assert!(aggregate.is_null(3)); // All-missing numeric group remains null.
+        }
+    }
+
+    #[test]
+    fn basic_operations_use_typed_columns_for_parquet_and_keep_text_output_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("basic.csv");
+        std::fs::write(&input, "id,score,label\n10,2,b\n2,10,a\n1,10,c\n, ,d\n").unwrap();
+
+        let run = |operation: &str, parameter: &str, output: &Path| {
+            handle(
+                Request {
+                    operation: operation.into(),
+                    input: input.clone(),
+                    output: output.to_path_buf(),
+                    parameter: parameter.into(),
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+            .unwrap()
+        };
+
+        let filtered = dir.path().join("filtered.parquet");
+        let result = run("filter", "score=010", &filtered);
+        assert!(result.preview.contains("\"rows\": 2"));
+        let bytes = localwright_core::read_bounded(&filtered, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow_array::Int64Array>()
+                .unwrap()
+                .values(),
+            &[2, 1]
+        );
+
+        let sorted = dir.path().join("sorted.parquet");
+        run("sort", "id", &sorted);
+        let bytes = localwright_core::read_bounded(&sorted, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(0).data_type(), &DataType::Int64);
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(&ids.values()[..3], &[1, 2, 10]);
+        assert!(ids.is_null(3));
+
+        let selected = dir.path().join("selected.parquet");
+        run("select-columns", "score,id", &selected);
+        let bytes = localwright_core::read_bounded(&selected, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(0).name(), "score");
+        assert_eq!(reader.schema().field(1).name(), "id");
+
+        let renamed = dir.path().join("renamed.parquet");
+        run("rename-column", "score=response", &renamed);
+        let bytes = localwright_core::read_bounded(&renamed, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(1).name(), "response");
+        assert_eq!(reader.schema().field(1).data_type(), &DataType::Int64);
+
+        let legacy_output = dir.path().join("legacy.csv");
+        run("filter", "score=010", &legacy_output);
+        assert_eq!(
+            std::fs::read_to_string(legacy_output).unwrap(),
+            "id,score,label\n"
+        );
+    }
+
+    #[test]
+    fn basic_typed_sort_accepts_supported_parquet_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.parquet");
+        let output = dir.path().join("sorted.parquet");
+        let text = validate(
+            vec!["id".into(), "value".into()],
+            vec![vec!["10".into(), "a".into()], vec!["2".into(), "b".into()]],
+        )
+        .unwrap();
+        typed::TypedTable::infer(&text, typed::SchemaRequest::default(), &Job::new())
+            .unwrap()
+            .write_parquet(&source, &Job::new())
+            .unwrap();
+        handle(
+            Request {
+                operation: "sort".into(),
+                input: source,
+                output: output.clone(),
+                parameter: "id".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[2, 10]);
+    }
+
+    #[test]
+    fn typed_group_sum_overflow_does_not_create_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("overflow.csv");
+        let project_path = dir.path().join("overflow.json");
+        let output = dir.path().join("overflow.parquet");
+        std::fs::write(&input, "group,value\na,1e308\na,1e308\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {"overrides": {"group": "categorical", "value": "float64"}},
+                "steps": [{"operation": "group-sum", "group_column": "group", "value_column": "value"}]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("Sum overflow"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn typed_project_numeric_expression_failure_does_not_write_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("expression-input.csv");
+        let project_path = dir.path().join("expression-project.json");
+        let output = dir.path().join("expression-result.parquet");
+        std::fs::write(&input, "value\n4\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "typed_schema": {},
+                "steps": [{
+                    "operation": "derive-numeric-column",
+                    "name": "quotient",
+                    "expression": {
+                        "op": "divide",
+                        "left": {"op": "column", "name": "value"},
+                        "right": {"op": "literal", "value": 0.0}
+                    }
+                }]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("division by zero"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn typed_steps_require_opt_in_without_changing_legacy_project_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let project_path = dir.path().join("project.json");
+        let output = dir.path().join("result.csv");
+        std::fs::write(&input, "score\n10\n").unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 1,
+                "steps": [{
+                    "operation": "filter-compare",
+                    "column": "score",
+                    "comparison": "gte",
+                    "value": "10"
+                }]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input,
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error
+            .message
+            .contains("require a project with typed_schema"));
+        assert!(!output.exists());
+    }
+
+    #[test]
     fn masks_only_nonempty_values_of_the_selected_column() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("input.csv");
@@ -1598,6 +2385,109 @@ mod tests {
         let imported = load(&output, None, &Job::new()).unwrap();
         assert_eq!(imported.headers, table.headers);
         assert_eq!(imported.rows, table.rows);
+    }
+
+    #[test]
+    fn schema_inspection_is_user_routed_and_never_modifies_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("measurements.csv");
+        let output = dir.path().join("schema.json");
+        let original = "score,site\n1.5,north\n2.5,south\n, north \n";
+        std::fs::write(&input, original).unwrap();
+        let request = Request {
+            operation: "inspect-schema".into(),
+            input: input.clone(),
+            output: output.clone(),
+            parameter: r#"{"overrides":{"score":"float64","site":"categorical"},"metadata":{"score":{"label":"Response","unit":"points"}}}"#.into(),
+            ..Request::default()
+        };
+        let outcome = handle(request.clone(), Job::new()).unwrap();
+        let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+        assert_eq!(report["rows"], 3);
+        assert_eq!(report["columns"][0]["type"], "float64");
+        assert_eq!(report["columns"][0]["missing"], 1);
+        assert_eq!(report["columns"][0]["unit"], "points");
+        assert_eq!(report["columns"][1]["categories"], 3);
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(&output).unwrap(), outcome.preview);
+
+        assert!(handle(request, Job::new()).is_err());
+        assert_eq!(std::fs::read_to_string(&output).unwrap(), outcome.preview);
+    }
+
+    #[test]
+    fn typed_parquet_export_roundtrips_arrow_types_nulls_and_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("typed.csv");
+        let output = directory.path().join("typed.parquet");
+        let source = concat!(
+            "active,count,large,score,date,time,when,group,note,empty\n",
+            "yes,-2,18446744073709551615,1.25,2024-02-29,12:30:01.25,2024-02-29T12:30:01+02:30,A,hello,\n",
+            "no,4,8,2.5,2025-01-01,00:00:00,2025-01-01T00:00:00Z,B,world,\n",
+        );
+        std::fs::write(&input, source).unwrap();
+        let outcome = handle(
+            Request {
+                operation: "export-typed-parquet".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: r#"{"overrides":{"group":"categorical"},"metadata":{"score":{"label":"Measured score","unit":"points"}}}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(outcome.written, Some(output.clone()));
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), source);
+
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let schema = reader.schema();
+        assert_eq!(schema.field(0).data_type(), &DataType::Boolean);
+        assert_eq!(schema.field(1).data_type(), &DataType::Int64);
+        assert_eq!(schema.field(2).data_type(), &DataType::UInt64);
+        assert_eq!(schema.field(3).data_type(), &DataType::Float64);
+        assert_eq!(schema.field(4).data_type(), &DataType::Date32);
+        assert_eq!(
+            schema.field(5).data_type(),
+            &DataType::Time64(arrow_schema::TimeUnit::Nanosecond)
+        );
+        assert!(matches!(
+            schema.field(6).data_type(),
+            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, Some(_))
+        ));
+        assert!(matches!(
+            schema.field(7).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+        assert_eq!(
+            schema.field(3).metadata()["localwright.label"],
+            "Measured score"
+        );
+        assert_eq!(schema.field(3).metadata()["localwright.unit"], "points");
+
+        let imported = load(&output, None, &Job::new()).unwrap();
+        assert_eq!(
+            imported.headers,
+            [
+                "active", "count", "large", "score", "date", "time", "when", "group", "note",
+                "empty"
+            ]
+        );
+        assert_eq!(imported.rows[0][2], "18446744073709551615");
+        assert_eq!(imported.rows[0][4], "2024-02-29");
+        assert_eq!(imported.rows[0][7], "A");
+        assert_eq!(imported.rows[0][9], "");
+        assert!(handle(
+            Request {
+                operation: "export-typed-parquet".into(),
+                input,
+                output,
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .is_err());
     }
 
     #[test]

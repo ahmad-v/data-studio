@@ -1,6 +1,6 @@
 # Format and operation compatibility
 
-Nothing is verified on a native target. The machine-readable registry is a development inventory, not an advertised capability list.
+No capability is marked device-verified or released. Linux and Windows hosted checks passed on the previous pull request head; the current typed Parquet change needs its own five-target verification. The machine-readable registry is a development inventory, not an advertised capability list.
 
 | Operation | Route | Evidence status |
 |---|---|---|
@@ -8,6 +8,8 @@ Nothing is verified on a native target. The machine-readable registry is a devel
 | fill-missing | Fill blanks in a selected column | Linux fixture-tested |
 | rename-column | Rename a table header | Linux fixture-tested |
 | preview | CSV / first XLSX sheet text preview | implemented-unverified |
+| inspect-schema | Infer or validate scalar types and metadata | Linux fixture-tested; native matrix pending |
+| export-typed-parquet | Arrow scalar, temporal and categorical Parquet export with import round-trip | Linux fixture-tested; native matrix pending |
 | filter | Exact-match filter; CSV or string Parquet | implemented-unverified |
 | sort | Stable ascending text sort by one column | Linux fixture-tested |
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
@@ -16,7 +18,7 @@ Nothing is verified on a native target. The machine-readable registry is a devel
 | left-join | Exact text key left outer join; duplicate matches expand; blank keys do not match | Linux fixture-tested |
 | right-join | Exact text key right outer join; right row order and unmatched blank-key rows retained | Linux fixture-tested |
 | full-join | Exact text full outer join; unmatched rows from both sides retained | Linux fixture-tested |
-| run-project | Replay declared table transformations from a versioned project | Linux fixture and CLI-tested |
+| run-project | Legacy text replay; typed comparisons, bounded numeric expressions, rename, type-preserving inner join, typed group sum/mean, sort, selection, row windows and Parquet output | Linux schema, null, metadata, join, aggregation and failure fixtures added; hosted verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | implemented-unverified |

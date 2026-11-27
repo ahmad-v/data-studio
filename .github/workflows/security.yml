@@ -1,0 +1,64 @@
+name: Security and dependency inventory
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Advisory and inventory audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_AUDIT_VERSION: 0.23.0
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin/cargo-audit
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}-security-audit-${{ env.CARGO_AUDIT_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust-toolchain.toml') }}-security-audit-${{ env.CARGO_AUDIT_VERSION }}-
+      - name: Install pinned RustSec audit tool
+        run: |
+          if ! cargo-audit --version 2>/dev/null | grep -Fq "$CARGO_AUDIT_VERSION"; then
+            cargo install --locked --version "$CARGO_AUDIT_VERSION" cargo-audit
+          fi
+      - name: Audit locked Rust dependencies
+        run: cargo audit --file Cargo.lock
+      - name: Generate CycloneDX SBOM and declared-license inventory
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          python3 scripts/cargo_sbom.py --output-dir "$RUNNER_TEMP/data-studio-security"
+          (
+            cd "$RUNNER_TEMP/data-studio-security"
+            sha256sum data-studio.cdx.json cargo-license-metadata.json > SHA256SUMS
+          )
+      - name: Upload audit inventories
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: data-studio-security-inventory-${{ github.run_id }}
+          path: ${{ runner.temp }}/data-studio-security/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
