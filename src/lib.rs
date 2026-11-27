@@ -2916,7 +2916,7 @@ mod tests {
         let batches = builder
             .build()
             .unwrap()
-            .collect::<parquet::errors::Result<Vec<_>>>()
+            .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(batches[0].num_rows(), 1);
         assert_eq!(
