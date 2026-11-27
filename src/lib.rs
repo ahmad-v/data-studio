@@ -1,4 +1,7 @@
 #![forbid(unsafe_code)]
+mod join;
+mod project;
+mod sql;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx};
@@ -7,13 +10,29 @@ use parquet::{
     arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
     basic::Compression,
 };
+use project::{Project, Step};
 use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
- Operation{id:"preview",label:"Preview",hint:"Preview CSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
- Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv or .parquet output."},
+ Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
+ Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv, .tsv or .parquet output."},
+ Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Optional new CSV or Parquet output."},
+ Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Stable ascending text order. Optional CSV, TSV or Parquet output."},
+ Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
+ Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
+ Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Exact nonblank text keys. Optional new CSV, TSV or Parquet output."#},
+ Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
+ Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
+ Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank."},
+ Operation{id:"run-project",label:"Run data project",hint:"Enter the project JSON path. Preview a local table or write it to a new CSV, TSV or Parquet file."},
+ Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
+ Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
+ Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
+ Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
+ Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
+ Operation{id:"line-chart",label:"Line chart SVG",hint:"Enter x-column,y-column. Complete numeric rows connect in table order. Choose a new .svg file."},
  Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
- Operation{id:"export",label:"Export",hint:"Export to .csv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
+ Operation{id:"export",label:"Export",hint:"Export to .csv, .tsv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
 struct Table {
     headers: Vec<String>,
@@ -146,8 +165,11 @@ fn load(p: &Path, sheet: Option<&str>, j: &Job) -> Result<Table> {
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("csv") => {
-            let mut r = csv::Reader::from_reader(bytes.as_slice());
+        Some(kind @ ("csv" | "tsv")) => {
+            let delimiter = if kind == "tsv" { b'\t' } else { b',' };
+            let mut r = csv::ReaderBuilder::new()
+                .delimiter(delimiter)
+                .from_reader(bytes.as_slice());
             let headers = r
                 .headers()
                 .map_err(err)?
@@ -212,7 +234,7 @@ fn load(p: &Path, sheet: Option<&str>, j: &Job) -> Result<Table> {
             validate(headers, records)
         }
         Some("parquet") => load_parquet(bytes, j),
-        _ => Err(Error::input("Expected CSV, XLSX or Parquet")),
+        _ => Err(Error::input("Expected CSV, TSV, XLSX or Parquet")),
     }
 }
 fn column(t: &Table, name: &str) -> Result<usize> {
@@ -221,42 +243,417 @@ fn column(t: &Table, name: &str) -> Result<usize> {
         .position(|h| h == name)
         .ok_or_else(|| Error::input("Column not found"))
 }
-fn summary(t: &Table, i: usize, j: &Job) -> Result<String> {
-    let (mut n, mut missing, mut mean, mut m2) = (0u64, 0u64, 0.0f64, 0.0f64);
-    let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
-    for row in &t.rows {
-        j.check()?;
-        let s = row[i].trim();
-        if s.is_empty() {
-            missing += 1;
-            continue;
+fn select_columns<'a>(
+    table: Table,
+    names: impl IntoIterator<Item = &'a str>,
+    job: &Job,
+) -> Result<Table> {
+    let mut seen = std::collections::HashSet::new();
+    let mut columns = Vec::new();
+    for name in names {
+        let index = column(&table, name)?;
+        if !seen.insert(index) {
+            return Err(Error::input("A column was selected more than once"));
         }
-        let x: f64 = s.parse().map_err(err)?;
+        columns.push(index);
+    }
+    let headers = columns
+        .iter()
+        .map(|&index| table.headers[index].clone())
+        .collect();
+    let rows = table
+        .rows
+        .into_iter()
+        .map(|row| {
+            job.check()?;
+            Ok(columns.iter().map(|&index| row[index].clone()).collect())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    validate(headers, rows)
+}
+
+fn deduplicate(rows: Vec<Vec<String>>, job: &Job) -> Result<Vec<Vec<String>>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut keep = Vec::with_capacity(rows.len());
+    for row in &rows {
+        job.check()?;
+        keep.push(seen.insert(row));
+    }
+    drop(seen);
+    Ok(rows
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(row, keep)| keep.then_some(row))
+        .collect())
+}
+
+const MASK_WARNING: &str = "Only selected columns' nonempty text cells were masked. Headers, blank patterns and other columns can still identify people or reveal sensitive information.";
+
+fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
+    match step {
+        Step::SelectColumns { columns } => {
+            return select_columns(table, columns.iter().map(String::as_str), job)
+        }
+        Step::Filter {
+            column: name,
+            value,
+        } => {
+            let index = column(&table, &name)?;
+            let mut kept = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if row[index] == value {
+                    kept.push(row);
+                }
+            }
+            table.rows = kept;
+        }
+        Step::Sort { column: name } => {
+            let index = column(&table, &name)?;
+            job.check()?;
+            table.rows.sort_by(|a, b| a[index].cmp(&b[index]));
+            job.check()?;
+        }
+        Step::Deduplicate {} => table.rows = deduplicate(table.rows, job)?,
+        Step::DropMissing { column: name } => {
+            let index = column(&table, &name)?;
+            let mut kept = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if !row[index].trim().is_empty() {
+                    kept.push(row);
+                }
+            }
+            table.rows = kept;
+        }
+        Step::FillMissing {
+            column: name,
+            value,
+        } => {
+            let index = column(&table, &name)?;
+            if value.trim().is_empty() {
+                return Err(Error::input(
+                    "Replacement value must contain non-whitespace text",
+                ));
+            }
+            let current_bytes = table.rows.iter().flatten().map(String::len).sum::<usize>();
+            let mut total_bytes = current_bytes;
+            for row in &mut table.rows {
+                job.check()?;
+                if row[index].trim().is_empty() {
+                    total_bytes = total_bytes - row[index].len() + value.len();
+                    if total_bytes > 32 * 1024 * 1024 {
+                        return Err(Error::new(
+                            ErrorKind::Limit,
+                            "Filled table exceeds 32 MiB of cell text",
+                        ));
+                    }
+                    row[index].clone_from(&value);
+                }
+            }
+        }
+        Step::RenameColumn { column: old, name } => {
+            let index = column(&table, &old)?;
+            if name.trim().is_empty() {
+                return Err(Error::input("Column name must contain non-whitespace text"));
+            }
+            if table
+                .headers
+                .iter()
+                .enumerate()
+                .any(|(position, existing)| position != index && *existing == name)
+            {
+                return Err(Error::input("A column with this name already exists"));
+            }
+            table.headers[index] = name;
+        }
+        Step::MaskColumn { column: name } => {
+            let index = column(&table, &name)?;
+            for row in &mut table.rows {
+                job.check()?;
+                if !row[index].is_empty() {
+                    row[index] = "[MASKED]".into();
+                }
+            }
+        }
+    }
+    Ok(table)
+}
+
+fn request_step(operation: &str, parameter: &str) -> Result<Option<Step>> {
+    let step = match operation {
+        "select-columns" => Step::SelectColumns {
+            columns: parameter.split(',').map(str::to_owned).collect(),
+        },
+        "filter" => {
+            let (name, value) = parameter
+                .split_once('=')
+                .ok_or_else(|| Error::input("Expected column=value"))?;
+            Step::Filter {
+                column: name.into(),
+                value: value.into(),
+            }
+        }
+        "sort" => Step::Sort {
+            column: parameter.into(),
+        },
+        "deduplicate" => Step::Deduplicate {},
+        "drop-missing" => Step::DropMissing {
+            column: parameter.into(),
+        },
+        "fill-missing" | "rename-column" => {
+            let (column, value) = parameter
+                .split_once('=')
+                .ok_or_else(|| Error::input("Expected column=value"))?;
+            if operation == "fill-missing" {
+                Step::FillMissing {
+                    column: column.into(),
+                    value: value.into(),
+                }
+            } else {
+                Step::RenameColumn {
+                    column: column.into(),
+                    name: value.into(),
+                }
+            }
+        }
+        "mask-column" => Step::MaskColumn {
+            column: parameter.into(),
+        },
+        _ => return Ok(None),
+    };
+    Ok(Some(step))
+}
+
+fn value_counts(table: &Table, index: usize, job: &Job) -> Result<String> {
+    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+    for row in &table.rows {
+        job.check()?;
+        *counts.entry(&row[index]).or_default() += 1;
+    }
+    let groups = counts.len();
+    let mut ranked = counts.into_iter().collect::<Vec<_>>();
+    ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let preview = ranked
+        .into_iter()
+        .take(30)
+        .map(|(value, count)| serde_json::json!({"value":value,"count":count}))
+        .collect::<Vec<_>>();
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "rows": table.rows.len(),
+        "distinct_values": groups,
+        "counts": preview,
+    }))?)
+}
+
+struct NumericSummary {
+    n: u64,
+    missing: u64,
+    mean: f64,
+    m2: f64,
+    min: f64,
+    max: f64,
+}
+
+impl Default for NumericSummary {
+    fn default() -> Self {
+        Self {
+            n: 0,
+            missing: 0,
+            mean: 0.0,
+            m2: 0.0,
+            min: f64::INFINITY,
+            max: f64::NEG_INFINITY,
+        }
+    }
+}
+
+impl NumericSummary {
+    fn add(&mut self, value: &str) -> Result<()> {
+        let value = value.trim();
+        if value.is_empty() {
+            self.missing += 1;
+            return Ok(());
+        }
+        let x: f64 = value.parse().map_err(err)?;
         if !x.is_finite() {
             return Err(Error::input("Nonfinite numeric value"));
         }
+        self.n += 1;
+        let delta = x - self.mean;
+        self.mean += delta / self.n as f64;
+        self.m2 += delta * (x - self.mean);
+        self.min = self.min.min(x);
+        self.max = self.max.max(x);
+        if !self.mean.is_finite() || !self.m2.is_finite() {
+            return Err(Error::input("Numerical overflow"));
+        }
+        Ok(())
+    }
+
+    fn sample_sd(&self) -> Option<f64> {
+        (self.n > 1).then(|| (self.m2 / (self.n - 1) as f64).max(0.0).sqrt())
+    }
+}
+
+fn summary(table: &Table, index: usize, job: &Job) -> Result<String> {
+    let mut stats = NumericSummary::default();
+    for row in &table.rows {
+        job.check()?;
+        stats.add(&row[index])?;
+    }
+    if stats.n == 0 {
+        return Err(Error::input("No finite numeric observations"));
+    }
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "n":stats.n, "missing":stats.missing, "mean":stats.mean, "sample_sd":stats.sample_sd(),
+        "min":stats.min, "max":stats.max, "method":"Welford, sample denominator n-1",
+    }))?)
+}
+
+fn grouped_summary(table: &Table, group: usize, value: usize, job: &Job) -> Result<Table> {
+    use std::collections::{btree_map::Entry, BTreeMap};
+    let headers = ["group", "n", "missing", "mean", "sample_sd", "min", "max"];
+    let mut budget = MAX_CELLS / headers.len();
+    let mut groups = BTreeMap::<&str, NumericSummary>::new();
+    for row in &table.rows {
+        job.check()?;
+        let stats = match groups.entry(row[group].as_str()) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                budget = budget
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::input("Grouped summary exceeds the cell limit"))?;
+                entry.insert(NumericSummary::default())
+            }
+        };
+        stats.add(&row[value])?;
+    }
+    let mut rows = Vec::with_capacity(groups.len());
+    for (key, stats) in groups {
+        job.check()?;
+        let display = |value: Option<f64>| value.map(|value| value.to_string()).unwrap_or_default();
+        let observed = stats.n != 0;
+        rows.push(vec![
+            key.into(),
+            stats.n.to_string(),
+            stats.missing.to_string(),
+            display(observed.then_some(stats.mean)),
+            display(stats.sample_sd()),
+            display(observed.then_some(stats.min)),
+            display(observed.then_some(stats.max)),
+        ]);
+    }
+    validate(headers.into_iter().map(str::to_owned).collect(), rows)
+}
+
+fn column_pair(table: &Table, parameter: &str) -> Result<(usize, usize)> {
+    let (x, y) = parameter
+        .split_once(',')
+        .ok_or_else(|| Error::input("Expected x-column,y-column"))?;
+    Ok((column(table, x)?, column(table, y)?))
+}
+
+struct PairMoments {
+    n: usize,
+    mean_x: f64,
+    mean_y: f64,
+    sum_xx: f64,
+    sum_yy: f64,
+    sum_xy: f64,
+}
+
+fn pair_moments(table: &Table, x: usize, y: usize, job: &Job) -> Result<PairMoments> {
+    let mut n = 0;
+    let (mut mean_x, mut mean_y) = (0.0, 0.0);
+    let (mut sum_xx, mut sum_yy, mut sum_xy) = (0.0, 0.0, 0.0);
+    for row in &table.rows {
+        job.check()?;
+        let (a, b) = (row[x].trim(), row[y].trim());
+        if a.is_empty() || b.is_empty() {
+            continue;
+        }
+        let (a, b): (f64, f64) = (a.parse().map_err(err)?, b.parse().map_err(err)?);
+        if !a.is_finite() || !b.is_finite() {
+            return Err(Error::input("Nonfinite numeric value in a complete pair"));
+        }
         n += 1;
-        let delta = x - mean;
-        mean += delta / n as f64;
-        m2 += delta * (x - mean);
-        min = min.min(x);
-        max = max.max(x);
-        if !mean.is_finite() || !m2.is_finite() {
+        let (dx, dy) = (a - mean_x, b - mean_y);
+        mean_x += dx / n as f64;
+        mean_y += dy / n as f64;
+        sum_xx += dx * (a - mean_x);
+        sum_yy += dy * (b - mean_y);
+        sum_xy += dx * (b - mean_y);
+        if !sum_xx.is_finite() || !sum_yy.is_finite() || !sum_xy.is_finite() {
             return Err(Error::input("Numerical overflow"));
         }
     }
-    if n == 0 {
-        return Err(Error::input("No finite numeric observations"));
+    Ok(PairMoments {
+        n,
+        mean_x,
+        mean_y,
+        sum_xx,
+        sum_yy,
+        sum_xy,
+    })
+}
+
+impl PairMoments {
+    fn pearson_r(&self) -> Result<f64> {
+        if self.n < 2 || self.sum_xx <= 0.0 || self.sum_yy <= 0.0 {
+            return Err(Error::input(
+                "Correlation requires at least two complete pairs and nonzero variance in both columns",
+            ));
+        }
+        // Divide by the larger norm first to avoid an intermediate overflow.
+        let (norm_x, norm_y) = (self.sum_xx.sqrt(), self.sum_yy.sqrt());
+        Ok((self.sum_xy / norm_x.max(norm_y) / norm_x.min(norm_y)).clamp(-1.0, 1.0))
     }
-    let sd = if n > 1 {
-        Some((m2 / (n - 1) as f64).max(0.0).sqrt())
+}
+
+fn correlation(table: &Table, x: usize, y: usize, job: &Job) -> Result<String> {
+    let moments = pair_moments(table, x, y, job)?;
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "x": table.headers[x],
+        "y": table.headers[y],
+        "n": moments.n,
+        "excluded_blank_pairs": table.rows.len() - moments.n,
+        "r": moments.pearson_r()?,
+        "method": "Pearson product-moment correlation, complete pairs",
+    }))?)
+}
+
+fn linear_regression(table: &Table, x: usize, y: usize, job: &Job) -> Result<String> {
+    let moments = pair_moments(table, x, y, job)?;
+    if moments.n < 2 || moments.sum_xx <= 0.0 {
+        return Err(Error::input(
+            "Regression requires at least two complete pairs and nonzero predictor variance",
+        ));
+    }
+    let slope = moments.sum_xy / moments.sum_xx;
+    let intercept = (-slope).mul_add(moments.mean_x, moments.mean_y);
+    if !slope.is_finite() || !intercept.is_finite() {
+        return Err(Error::input(
+            "Numerical overflow in regression coefficients",
+        ));
+    }
+    let r_squared = if moments.sum_yy > 0.0 {
+        Some(moments.pearson_r()?.powi(2))
     } else {
         None
     };
-    Ok(serde_json::to_string_pretty(
-        &serde_json::json!({"n":n,"missing":missing,"mean":mean,"sample_sd":sd,"min":min,"max":max,"method":"Welford, sample denominator n-1"}),
-    )?)
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "predictor": table.headers[x],
+        "response": table.headers[y],
+        "n": moments.n,
+        "excluded_blank_pairs": table.rows.len() - moments.n,
+        "intercept": intercept,
+        "slope": slope,
+        "r_squared": r_squared,
+        "method": "Ordinary least squares with intercept, complete pairs",
+    }))?)
 }
+
 fn safe(s: &str) -> String {
     if s.trim_start().starts_with(['=', '+', '-', '@']) || s.starts_with(['\t', '\r', '\n']) {
         format!("'{s}")
@@ -266,8 +663,11 @@ fn safe(s: &str) -> String {
 }
 fn export(t: &Table, p: &Path, j: &Job) -> Result<()> {
     match p.extension().and_then(|s| s.to_str()) {
-        Some("csv") => write_new(p, |f| {
-            let mut w = csv::Writer::from_writer(f);
+        Some(kind @ ("csv" | "tsv")) => write_new(p, |f| {
+            let delimiter = if kind == "tsv" { b'\t' } else { b',' };
+            let mut w = csv::WriterBuilder::new()
+                .delimiter(delimiter)
+                .from_writer(f);
             w.write_record(t.headers.iter().map(|s| safe(s)))
                 .map_err(err)?;
             for row in &t.rows {
@@ -299,22 +699,48 @@ fn export(t: &Table, p: &Path, j: &Job) -> Result<()> {
             writer.close().map_err(err)?;
             Ok(())
         }),
-        _ => Err(Error::input("Output must be .csv or .parquet")),
+        _ => Err(Error::input("Output must be .csv, .tsv or .parquet")),
     }
 }
 pub fn handle(r: Request, j: Job) -> Result<Outcome> {
-    let sheet = (matches!(r.operation.as_str(), "preview" | "export") && !r.parameter.is_empty())
-        .then_some(r.parameter.as_str());
+    let project = if r.operation == "run-project" {
+        Some(Project::open(Path::new(&r.parameter))?)
+    } else {
+        None
+    };
+    let sheet = match &project {
+        Some(project) => project.worksheet.as_deref(),
+        None => (matches!(r.operation.as_str(), "preview" | "export") && !r.parameter.is_empty())
+            .then_some(r.parameter.as_str()),
+    };
+    if project.is_some()
+        && sheet.is_some()
+        && !r
+            .input
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("xlsx"))
+    {
+        return Err(Error::input(
+            "Project worksheet selection requires XLSX input",
+        ));
+    }
     let mut t = load(&r.input, sheet, &j)?;
     let mut written = None;
+    let mut warnings = vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()];
     let preview = match r.operation.as_str() {
+        "counts" => value_counts(&t, column(&t, &r.parameter)?, &j)?,
         "summary" => summary(&t, column(&t, &r.parameter)?, &j)?,
-        "scatter" => {
-            let (a, b) = r
-                .parameter
-                .split_once(',')
-                .ok_or_else(|| Error::input("Expected x-column,y-column"))?;
-            let (a, b) = (column(&t, a)?, column(&t, b)?);
+        "correlation" => {
+            let (x, y) = column_pair(&t, &r.parameter)?;
+            correlation(&t, x, y, &j)?
+        }
+        "linear-regression" => {
+            let (x, y) = column_pair(&t, &r.parameter)?;
+            linear_regression(&t, x, y, &j)?
+        }
+        "scatter" | "line-chart" => {
+            let (a, b) = column_pair(&t, &r.parameter)?;
             if r.output.extension().and_then(|x| x.to_str()) != Some("svg") {
                 return Err(Error::input("Expected .svg"));
             }
@@ -325,31 +751,52 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                     continue;
                 }
                 if points.len() >= 10000 {
-                    return Err(Error::input("Scatter point limit"));
+                    return Err(Error::input("Figure point limit"));
                 }
                 points.push((
                     row[a].trim().parse().map_err(err)?,
                     row[b].trim().parse().map_err(err)?,
                 ));
             }
-            localwright_core::figure::export_scatter(&r.output, &points, 800, 600)?;
+            if r.operation == "line-chart" {
+                localwright_core::figure::export_line(&r.output, &points, 800, 600)?;
+            } else {
+                localwright_core::figure::export_scatter(&r.output, &points, 800, 600)?;
+            }
             written = Some(r.output);
             format!(
                 "{} complete cases plotted; missing pairs excluded",
                 points.len()
             )
         }
-        "preview" | "filter" | "export" => {
-            if r.operation == "filter" {
-                let (name, value) = r
-                    .parameter
-                    .split_once('=')
-                    .ok_or_else(|| Error::input("Expected column=value"))?;
-                let i = column(&t, name)?;
-                t.rows.retain(|row| row[i] == value);
+        "preview" | "filter" | "export" | "select-columns" | "sort" | "deduplicate"
+        | "mask-column" | "run-project" | "inner-join" | "group-summary" | "select-sql"
+        | "drop-missing" | "fill-missing" | "rename-column" => {
+            if let Some(project) = project {
+                let (result, steps, masked) = project.run(t, &j)?;
+                t = result;
+                warnings.push(format!("Applied {steps} declarative project steps."));
+                if masked {
+                    warnings.push(MASK_WARNING.into());
+                }
+            } else if r.operation == "select-sql" {
+                t = sql::query(t, &r.parameter, &j)?;
+                warnings.push("The local SQLite input table contains text. Use explicit casts for numeric work. NULL results become blank cells.".into());
+            } else if r.operation == "group-summary" {
+                let (group, value) = column_pair(&t, &r.parameter)?;
+                t = grouped_summary(&t, group, value, &j)?;
+                warnings.push("Group labels are exact text, including blanks. Blank numeric cells are excluded, undefined statistics are blank, and sample SD uses n-1.".into());
+            } else if r.operation == "inner-join" {
+                t = join::inner(t, &r.parameter, &j)?;
+                warnings.push("Inner join uses exact text keys. Blank and unmatched keys are excluded. Matching duplicate keys produce every matching pair.".into());
+            } else if let Some(step) = request_step(&r.operation, &r.parameter)? {
+                if matches!(step, Step::MaskColumn { .. }) {
+                    warnings.push(MASK_WARNING.into());
+                }
+                t = apply_step(t, step, &j)?;
             }
             if r.operation == "export"
-                || (r.operation == "filter" && !r.output.as_os_str().is_empty())
+                || (r.operation != "preview" && !r.output.as_os_str().is_empty())
             {
                 j.check()?;
                 export(&t, &r.output, &j)?;
@@ -362,7 +809,12 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
         }
         _ => return Err(Error::input("Unknown operation")),
     };
-    Ok(Outcome{preview,written,warnings:vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. CSV export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()],..Outcome::default()})
+    Ok(Outcome {
+        preview,
+        written,
+        warnings,
+        ..Outcome::default()
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -378,6 +830,13 @@ mod tests {
         assert_eq!(v["mean"], 2.0);
         assert_eq!(v["sample_sd"], 1.0);
         assert_eq!(v["missing"], 1);
+        let counts: serde_json::Value =
+            serde_json::from_str(&value_counts(&t, 0, &Job::new()).unwrap()).unwrap();
+        assert_eq!(counts["distinct_values"], 2);
+        assert_eq!(
+            counts["counts"][0],
+            serde_json::json!({"value":"a","count":3})
+        );
         let q = d.path().join("out.csv");
         handle(
             Request {
@@ -404,6 +863,303 @@ mod tests {
         assert_eq!(imported.headers, t.headers);
         assert_eq!(imported.rows, t.rows);
     }
+    #[test]
+    fn selects_columns_in_requested_order() {
+        let table = validate(
+            vec!["one".into(), "two".into()],
+            vec![vec!["x".into(), "y".into()]],
+        )
+        .unwrap();
+        let reordered = select_columns(table, ["two", "one"], &Job::new()).unwrap();
+        assert_eq!(reordered.headers, ["two", "one"]);
+        assert_eq!(reordered.rows[0], ["y", "x"]);
+        assert!(select_columns(reordered, ["two", "two"], &Job::new()).is_err());
+    }
+
+    #[test]
+    fn select_sql_queries_the_table_and_denies_other_capabilities() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let output = dir.path().join("out.csv");
+        std::fs::write(&input, "group,value\nA,2\nA,3\nB,4\n").unwrap();
+        let request = |statement: &str| Request {
+            operation: "select-sql".into(),
+            parameter: statement.into(),
+            input: input.clone(),
+            output: output.clone(),
+            ..Request::default()
+        };
+        for invalid in [
+            "ATTACH DATABASE 'other.db' AS other",
+            "DELETE FROM input",
+            "SELECT * FROM sqlite_schema",
+            "PRAGMA table_info(input)",
+            "SELECT load_extension('forbidden')",
+            "SELECT count(*) FROM input; SELECT 2",
+            "SELECT random()",
+            "SELECT X'00' AS binary",
+        ] {
+            assert!(handle(request(invalid), Job::new()).is_err(), "{invalid}");
+            assert!(!output.exists());
+        }
+        handle(
+            request("SELECT \"group\", SUM(CAST(value AS INTEGER)) AS total FROM input GROUP BY \"group\" ORDER BY \"group\""),
+            Job::new(),
+        ).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(output).unwrap(),
+            "group,total\nA,5\nB,4\n"
+        );
+    }
+
+    #[test]
+    fn grouped_summary_keeps_empty_groups_and_uses_sample_deviation() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let output = dir.path().join("out.tsv");
+        std::fs::write(&input, "group,x\nA,1\nA,3\nA,\nB,2\nC,\n").unwrap();
+        handle(
+            Request {
+                operation: "group-summary".into(),
+                parameter: "group,x".into(),
+                input,
+                output: output.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let table = load(&output, None, &Job::new()).unwrap();
+        assert_eq!(table.rows[0][..4], ["A", "2", "1", "2"]);
+        let sample_sd = table.rows[0][4].parse::<f64>().unwrap();
+        assert!((sample_sd - 2.0f64.sqrt()).abs() < 1e-12);
+        assert_eq!(table.rows[1], ["B", "1", "0", "2", "", "2", "2"]);
+        assert_eq!(table.rows[2], ["C", "0", "1", "", "", "", ""]);
+    }
+
+    #[test]
+    fn inner_join_preserves_match_order_and_excludes_blank_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let left = dir.path().join("left.csv");
+        let right = dir.path().join("right.tsv");
+        let output = dir.path().join("joined.csv");
+        std::fs::write(&left, "key,name\na,First\nb,Second\n,Blank\na,Third\n").unwrap();
+        std::fs::write(&right, "id\tname\na\tOne\na\tTwo\n\tBlank\n").unwrap();
+        let request = Request {
+            operation: "inner-join".into(),
+            input: left,
+            output: output.clone(),
+            parameter: serde_json::json!({
+                "right_path": right, "left_key": "key", "right_key": "id"
+            })
+            .to_string(),
+            ..Request::default()
+        };
+        handle(request.clone(), Job::new()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "key,name,right.name\na,First,One\na,First,Two\na,Third,One\na,Third,Two\n"
+        );
+        assert!(handle(request, Job::new()).is_err());
+    }
+
+    #[test]
+    fn project_runs_ordered_steps_and_withholds_partial_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let output = dir.path().join("project.tsv");
+        let path = dir.path().join("pipeline.json");
+        std::fs::write(
+            &input,
+            "name,group,id\nAda,a,2\nRen,a,1\nAda,a,2\nKai,b,3\n",
+        )
+        .unwrap();
+        let request = Request {
+            operation: "run-project".into(),
+            input: input.clone(),
+            output: output.clone(),
+            parameter: path.to_str().unwrap().into(),
+            ..Request::default()
+        };
+        std::fs::write(
+            &path,
+            r#"{
+            "schema_version": 1,
+            "steps": [
+                {"operation":"filter","column":"group","value":"a"},
+                {"operation":"sort","column":"unknown"}
+            ]
+        }"#,
+        )
+        .unwrap();
+        assert!(handle(request.clone(), Job::new())
+            .unwrap_err()
+            .message
+            .contains("Project step 2"));
+        assert!(!output.exists());
+        std::fs::write(
+            &path,
+            r#"{
+            "schema_version": 1,
+            "steps": [
+                {"operation":"filter","column":"group","value":"a"},
+                {"operation":"deduplicate"},
+                {"operation":"sort","column":"id"},
+                {"operation":"mask-column","column":"name"},
+                {"operation":"select-columns","columns":["id","name"]}
+            ]
+        }"#,
+        )
+        .unwrap();
+        let result = handle(request, Job::new()).unwrap();
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Applied 5")));
+        assert_eq!(
+            std::fs::read_to_string(output).unwrap(),
+            "id\tname\n1\t[MASKED]\n2\t[MASKED]\n"
+        );
+    }
+
+    #[test]
+    fn masks_only_nonempty_values_of_the_selected_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let output = dir.path().join("masked.csv");
+        let original = "name,category\nAda,A\n,B\n ,C\n";
+        std::fs::write(&input, original).unwrap();
+        let request = Request {
+            operation: "mask-column".into(),
+            input: input.clone(),
+            output: output.clone(),
+            parameter: "name".into(),
+            ..Request::default()
+        };
+        let result = handle(request.clone(), Job::new()).unwrap();
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("blank patterns")));
+        assert!(!result.preview.contains("Ada"));
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "name,category\n[MASKED],A\n,B\n[MASKED],C\n"
+        );
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        assert!(handle(request, Job::new()).is_err());
+    }
+
+    #[test]
+    fn writes_a_vector_line_chart_in_table_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("series.csv");
+        let output = dir.path().join("series.svg");
+        std::fs::write(&input, "x,y\n3,0\n1,5\n2,2.5\n4,\n").unwrap();
+        let result = handle(
+            Request {
+                operation: "line-chart".into(),
+                input,
+                output: output.clone(),
+                parameter: "x,y".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert!(result.preview.contains("3 complete cases"));
+        let chart = std::fs::read_to_string(output).unwrap();
+        assert!(chart.contains(r#"points=" 780.000,550.000 60.000,20.000 420.000,285.000""#));
+        assert!(!chart.contains("<image"));
+    }
+
+    #[test]
+    fn correlation_uses_only_complete_pairs() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("pairs.csv");
+        std::fs::write(&input, "x,y,constant\n1,6,1\n2,4,1\n3,2,1\n4,,1\n").unwrap();
+        let request = |parameter: &str| Request {
+            operation: "correlation".into(),
+            input: input.clone(),
+            parameter: parameter.into(),
+            ..Request::default()
+        };
+        let outcome = handle(request("x,y"), Job::new()).unwrap();
+        let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+        assert_eq!(report["n"], 3);
+        assert_eq!(report["excluded_blank_pairs"], 1);
+        assert!((report["r"].as_f64().unwrap() + 1.0).abs() < 1e-12);
+        assert!(handle(request("x,constant"), Job::new()).is_err());
+    }
+
+    #[test]
+    fn fits_ordinary_least_squares_and_handles_constant_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("fit.csv");
+        std::fs::write(&input, "x,y,constant\n1,2,4\n2,4,4\n3,7,4\n4,,4\n").unwrap();
+        let fit = |parameter: &str| {
+            handle(
+                Request {
+                    operation: "linear-regression".into(),
+                    input: input.clone(),
+                    parameter: parameter.into(),
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+        };
+        let report: serde_json::Value = serde_json::from_str(&fit("x,y").unwrap().preview).unwrap();
+        assert_eq!(report["n"], 3);
+        assert_eq!(report["excluded_blank_pairs"], 1);
+        assert!((report["intercept"].as_f64().unwrap() + 2.0 / 3.0).abs() < 1e-12);
+        assert!((report["slope"].as_f64().unwrap() - 2.5).abs() < 1e-12);
+        assert!((report["r_squared"].as_f64().unwrap() - 75.0 / 76.0).abs() < 1e-12);
+        let constant: serde_json::Value =
+            serde_json::from_str(&fit("x,constant").unwrap().preview).unwrap();
+        assert_eq!(constant["slope"], 0.0);
+        assert_eq!(constant["intercept"], 4.0);
+        assert!(constant["r_squared"].is_null());
+        assert!(fit("constant,y").is_err());
+    }
+
+    #[test]
+    fn sort_is_stable_and_deduplication_keeps_first_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("rows.csv");
+        std::fs::write(&input, "key,name\nb,B\na,First\na,Second\na,First\n").unwrap();
+        for (operation, parameter, expected) in [
+            ("sort", "key", "key,name\na,First\na,Second\na,First\nb,B\n"),
+            ("deduplicate", "", "key,name\nb,B\na,First\na,Second\n"),
+        ] {
+            let output = dir.path().join(format!("{operation}.csv"));
+            let request = Request {
+                operation: operation.into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: parameter.into(),
+                ..Request::default()
+            };
+            handle(request.clone(), Job::new()).unwrap();
+            assert_eq!(std::fs::read_to_string(&output).unwrap(), expected);
+            assert!(handle(request, Job::new()).is_err());
+        }
+    }
+
+    #[test]
+    fn tsv_preserves_quoted_tabs_and_unicode() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("source.tsv");
+        let output = dir.path().join("copy.tsv");
+        std::fs::write(&input, "name\tvalue\nCafé\t\"a\tb\"\n").unwrap();
+        let table = load(&input, None, &Job::new()).unwrap();
+        assert_eq!(table.headers, ["name", "value"]);
+        assert_eq!(table.rows[0], ["Café", "a\tb"]);
+        export(&table, &output, &Job::new()).unwrap();
+        let imported = load(&output, None, &Job::new()).unwrap();
+        assert_eq!(imported.headers, table.headers);
+        assert_eq!(imported.rows, table.rows);
+    }
+
     #[test]
     fn formula_guard() {
         assert_eq!(safe(" =1+1"), "' =1+1");

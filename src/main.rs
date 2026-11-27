@@ -10,8 +10,12 @@ fn main() {
         return;
     }
     #[cfg(feature = "gui")]
-    if let Err(e) = localwright_ui::run("Data Studio", data_studio::OPERATIONS, data_studio::handle)
-    {
+    if let Err(e) = localwright_ui::run_with_saved_appearance(
+        "Data Studio",
+        "data-studio",
+        data_studio::OPERATIONS,
+        data_studio::handle,
+    ) {
         eprintln!("{e}");
         std::process::exit(1);
     }

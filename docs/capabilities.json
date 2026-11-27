@@ -5,10 +5,45 @@
   "verified_capabilities": [],
   "development_routes": [
     {
+      "operation": "drop-missing",
+      "description": "Drop rows missing a selected value",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux integration fixture passed"
+    },
+    {
+      "operation": "fill-missing",
+      "description": "Fill blanks in a selected column",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux integration fixture passed"
+    },
+    {
+      "operation": "rename-column",
+      "description": "Rename a table header",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux integration fixture passed"
+    },
+    {
+      "operation": "select-columns",
+      "description": "Select and reorder table columns",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 fixtures passed"
+    },
+    {
+      "operation": "counts",
+      "description": "Exact value counts for a column",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 fixtures passed"
+    },
+    {
       "operation": "preview",
       "description": "CSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview",
       "status": "implemented-unverified",
-      "targets": [],
+      "targets": ["x86_64-unknown-linux-gnu"],
       "fixture_status": "not run"
     },
     {
@@ -17,6 +52,55 @@
       "status": "implemented-unverified",
       "targets": [],
       "fixture_status": "not run"
+    },
+    {
+      "operation": "sort",
+      "description": "Stable ascending text sort by one column",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 fixtures passed"
+    },
+    {
+      "operation": "deduplicate",
+      "description": "Keep the first occurrence of each exact row",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 fixtures passed"
+    },
+    {
+      "operation": "mask-column",
+      "description": "Replace nonempty cells in a selected column",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 source preservation and TSV export fixtures passed"
+    },
+    {
+      "operation": "inner-join",
+      "description": "Exact nonblank key inner join between two local tables",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux fixtures and mixed CSV/TSV Unicode CLI output verified"
+    },
+    {
+      "operation": "run-project",
+      "description": "Replay an ordered version 1 data project against a local table",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 replay, CLI export and failed-step isolation passed"
+    },
+    {
+      "operation": "select-sql",
+      "description": "Bounded read-only SQLite SELECT over one local input",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "SQL result comparison and authorization fixtures passed"
+    },
+    {
+      "operation": "group-summary",
+      "description": "Grouped finite numeric descriptive statistics",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Grouped summary checked against independent Python statistics"
     },
     {
       "operation": "summary",
@@ -31,6 +115,27 @@
       "status": "implemented-unverified",
       "targets": [],
       "fixture_status": "not run"
+    },
+    {
+      "operation": "correlation",
+      "description": "Pearson coefficient on complete numeric pairs",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 fixtures passed"
+    },
+    {
+      "operation": "linear-regression",
+      "description": "Ordinary least squares with intercept and complete numeric pairs",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 regression suite and independent arithmetic CLI fixture passed"
+    },
+    {
+      "operation": "line-chart",
+      "description": "Monochrome vector lines in table order",
+      "status": "implemented-unverified",
+      "targets": ["x86_64-unknown-linux-gnu"],
+      "fixture_status": "Linux x86_64 vector fixture passed"
     },
     {
       "operation": "scatter",
