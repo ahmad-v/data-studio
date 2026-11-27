@@ -330,6 +330,233 @@ pub(crate) fn apply(mut table: Table, step: Step, job: &Job) -> Result<Table> {
         } => {
             table = group_aggregate(&table, &group_column, &value_column, true, job)?;
         }
+        Step::FilterContains { column, value } => {
+            let index = crate::column(&table, &column)?;
+            if value.is_empty() {
+                return Err(Error::input("Search text must not be empty"));
+            }
+            let mut rows = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if row[index].contains(&value) {
+                    rows.push(row);
+                }
+            }
+            table.rows = rows;
+        }
+        Step::FilterNotContains { column, value } => {
+            let index = crate::column(&table, &column)?;
+            if value.is_empty() {
+                return Err(Error::input("Search text must not be empty"));
+            }
+            let mut rows = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                if !row[index].contains(&value) {
+                    rows.push(row);
+                }
+            }
+            table.rows = rows;
+        }
+        Step::HeadRows { rows } => {
+            if rows > MAX_CELLS {
+                return Err(Error::input("Row limit cannot exceed 500,000"));
+            }
+            job.check()?;
+            table.rows.truncate(rows);
+        }
+        Step::TailRows { rows } => {
+            if rows > MAX_CELLS {
+                return Err(Error::input("Row limit cannot exceed 500,000"));
+            }
+            job.check()?;
+            let start = table.rows.len().saturating_sub(rows);
+            table.rows = table.rows.split_off(start);
+        }
+        Step::DropDuplicatesByColumns { columns } => {
+            if columns.is_empty() || columns.len() > MAX_COLS {
+                return Err(Error::input("Choose 1 to 256 duplicate-key columns"));
+            }
+            let indexes = columns
+                .iter()
+                .map(|name| crate::column(&table, name))
+                .collect::<Result<Vec<_>>>()?;
+            if indexes.iter().collect::<HashSet<_>>().len() != indexes.len() {
+                return Err(Error::input("Duplicate-key columns must be unique"));
+            }
+            let mut seen = HashSet::<Vec<String>>::new();
+            let mut rows = Vec::new();
+            for row in table.rows {
+                job.check()?;
+                let key = indexes.iter().map(|&index| row[index].clone()).collect();
+                if seen.insert(key) {
+                    rows.push(row);
+                }
+            }
+            table.rows = rows;
+        }
+        Step::AddIndexColumn { name, start } => {
+            unique_name(&table, &name, &HashSet::new())?;
+            if table.headers.len() >= MAX_COLS
+                || table.rows.len().saturating_mul(table.headers.len() + 1) > MAX_CELLS
+            {
+                return Err(Error::new(
+                    localwright_core::ErrorKind::Limit,
+                    "Index column exceeds table dimensions",
+                ));
+            }
+            let mut indexes = Vec::with_capacity(table.rows.len());
+            let mut added_bytes = name.len();
+            for offset in 0..table.rows.len() {
+                job.check()?;
+                let offset = i64::try_from(offset)
+                    .map_err(|_| Error::input("Row index exceeds signed 64-bit range"))?;
+                let index = start
+                    .checked_add(offset)
+                    .ok_or_else(|| Error::input("Row index overflow"))?;
+                let index = index.to_string();
+                added_bytes = added_bytes
+                    .checked_add(index.len())
+                    .filter(|bytes| *bytes <= MAX_TEXT_BYTES)
+                    .ok_or_else(|| {
+                        Error::new(
+                            localwright_core::ErrorKind::Limit,
+                            "Index column exceeds 32 MiB of cell text",
+                        )
+                    })?;
+                indexes.push(index);
+            }
+            text_bytes(&table)?
+                .checked_add(added_bytes)
+                .filter(|bytes| *bytes <= MAX_TEXT_BYTES)
+                .ok_or_else(|| {
+                    Error::new(
+                        localwright_core::ErrorKind::Limit,
+                        "Index column exceeds 32 MiB of cell text",
+                    )
+                })?;
+            table.headers.push(name);
+            for (row, index) in table.rows.iter_mut().zip(indexes) {
+                job.check()?;
+                row.push(index);
+            }
+        }
+        Step::AddConstantColumn { name, value } => {
+            unique_name(&table, &name, &HashSet::new())?;
+            if table.headers.len() >= MAX_COLS
+                || table.rows.len().saturating_mul(table.headers.len() + 1) > MAX_CELLS
+            {
+                return Err(Error::new(
+                    localwright_core::ErrorKind::Limit,
+                    "Constant column exceeds table dimensions",
+                ));
+            }
+            let added_bytes = value.len().checked_mul(table.rows.len()).ok_or_else(|| {
+                Error::new(
+                    localwright_core::ErrorKind::Limit,
+                    "Constant column exceeds 32 MiB of cell text",
+                )
+            })?;
+            text_bytes(&table)?
+                .checked_add(added_bytes)
+                .and_then(|bytes| bytes.checked_add(name.len()))
+                .filter(|n| *n <= MAX_TEXT_BYTES)
+                .ok_or_else(|| {
+                    Error::new(
+                        localwright_core::ErrorKind::Limit,
+                        "Constant column exceeds 32 MiB of cell text",
+                    )
+                })?;
+            table.headers.push(name);
+            for row in &mut table.rows {
+                job.check()?;
+                row.push(value.clone());
+            }
+        }
+        Step::NormalizeText { column, mode } => {
+            let index = crate::column(&table, &column)?;
+            if !matches!(
+                mode.as_str(),
+                "trim" | "lower" | "upper" | "collapse-whitespace"
+            ) {
+                return Err(Error::input(
+                    "Choose trim, lower, upper or collapse-whitespace",
+                ));
+            }
+            let mut text_size = text_bytes(&table)?;
+            for row in &mut table.rows {
+                job.check()?;
+                let normalized = match mode.as_str() {
+                    "trim" => row[index].trim().to_owned(),
+                    "lower" => row[index].to_lowercase(),
+                    "upper" => row[index].to_uppercase(),
+                    "collapse-whitespace" => {
+                        row[index].split_whitespace().collect::<Vec<_>>().join(" ")
+                    }
+                    _ => unreachable!(),
+                };
+                text_size = text_size
+                    .checked_sub(row[index].len())
+                    .and_then(|bytes| bytes.checked_add(normalized.len()))
+                    .filter(|bytes| *bytes <= MAX_TEXT_BYTES)
+                    .ok_or_else(|| {
+                        Error::new(
+                            localwright_core::ErrorKind::Limit,
+                            "Normalized table exceeds 32 MiB of cell text",
+                        )
+                    })?;
+                row[index] = normalized;
+            }
+        }
+        Step::RenameColumns { mapping } => {
+            if mapping.is_empty() || mapping.len() > MAX_COLS {
+                return Err(Error::input("Provide 1 to 256 column renames"));
+            }
+            let mut headers = table.headers.clone();
+            for (old, new) in mapping {
+                let index = crate::column(&table, &old)?;
+                if new.trim().is_empty() {
+                    return Err(Error::input(
+                        "Column names must contain non-whitespace text",
+                    ));
+                }
+                headers[index] = new;
+            }
+            let mut seen = HashSet::new();
+            if headers.iter().any(|name| !seen.insert(name.clone())) {
+                return Err(Error::input("Renamed column names must remain unique"));
+            }
+            table.headers = headers;
+        }
+        Step::DropColumns { columns } => {
+            if columns.is_empty() || columns.len() >= table.headers.len() {
+                return Err(Error::input(
+                    "Drop columns must remove at least one column and leave at least one",
+                ));
+            }
+            let indexes = columns
+                .iter()
+                .map(|name| crate::column(&table, name))
+                .collect::<Result<Vec<_>>>()?;
+            if indexes.iter().collect::<HashSet<_>>().len() != indexes.len() {
+                return Err(Error::input("Drop columns must be unique"));
+            }
+            let remove = indexes.into_iter().collect::<HashSet<_>>();
+            table.headers = table
+                .headers
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, name)| (!remove.contains(&i)).then_some(name))
+                .collect();
+            for row in &mut table.rows {
+                job.check()?;
+                *row = std::mem::take(row)
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(i, value)| (!remove.contains(&i)).then_some(value))
+                    .collect();
+            }
+        }
         _ => {
             return Err(Error::input(
                 "This project step is not a reshape or recode operation",

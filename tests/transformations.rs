@@ -157,6 +157,200 @@ fn grouped_sum_and_mean_ignore_blank_numeric_cells_but_keep_groups() {
 }
 
 #[test]
+fn literal_filters_are_case_sensitive_and_reject_empty_needle() {
+    let source = "name,team\nAda,red\nGrace,blue\nAdele,green\n";
+    let contains = operation(
+        source,
+        "filter-contains",
+        json!({"column":"name","value":"a"}),
+    );
+    assert_eq!(
+        contains["preview"],
+        json!([["Ada", "red"], ["Grace", "blue"]])
+    );
+    let excludes = operation(
+        source,
+        "filter-not-contains",
+        json!({"column":"name","value":"Grace"}),
+    );
+    assert_eq!(
+        excludes["preview"],
+        json!([["Ada", "red"], ["Adele", "green"]])
+    );
+    assert!(fails(
+        source,
+        "filter-contains",
+        json!({"column":"name","value":""})
+    ));
+}
+
+#[test]
+fn head_and_tail_keep_requested_rows_in_source_order() {
+    let source = "id\n1\n2\n3\n4\n";
+    assert_eq!(
+        operation(source, "head-rows", json!({"rows":2}))["preview"],
+        json!([["1"], ["2"]])
+    );
+    assert_eq!(
+        operation(source, "tail-rows", json!({"rows":2}))["preview"],
+        json!([["3"], ["4"]])
+    );
+    assert_eq!(
+        operation(source, "tail-rows", json!({"rows":10}))["preview"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert!(fails(source, "head-rows", json!({"rows":500001})));
+}
+
+#[test]
+fn subset_duplicate_removal_keeps_the_first_exact_key() {
+    let result = operation(
+        "id,email,name\n1,a,A\n2,a,B\n3,,C\n4,,D\n",
+        "drop-duplicates-by-columns",
+        json!({"columns":["email"]}),
+    );
+    assert_eq!(result["preview"], json!([["1", "a", "A"], ["3", "", "C"]]));
+    assert!(fails(
+        "id\n1\n",
+        "drop-duplicates-by-columns",
+        json!({"columns":[]})
+    ));
+}
+
+#[test]
+fn index_and_constant_columns_are_bounded_and_ordered() {
+    let source = "name\nAda\nGrace\n";
+    let indexed = operation(source, "add-index-column", json!({"name":"row","start":7}));
+    assert_eq!(indexed["headers"], json!(["name", "row"]));
+    assert_eq!(indexed["preview"], json!([["Ada", "7"], ["Grace", "8"]]));
+    let tagged = operation(
+        source,
+        "add-constant-column",
+        json!({"name":"cohort","value":"pilot"}),
+    );
+    assert_eq!(
+        tagged["preview"],
+        json!([["Ada", "pilot"], ["Grace", "pilot"]])
+    );
+    assert!(fails(
+        source,
+        "add-index-column",
+        json!({"name":"row","start":9223372036854775807_i64})
+    ));
+}
+
+#[test]
+fn text_normalization_supports_trim_case_and_unicode_whitespace() {
+    let source = "name\n  ÉCOLE  \nStraße\nA\t B\n";
+    assert_eq!(
+        operation(
+            source,
+            "normalize-text",
+            json!({"column":"name","mode":"trim"})
+        )["preview"][0][0],
+        "ÉCOLE"
+    );
+    assert_eq!(
+        operation(
+            source,
+            "normalize-text",
+            json!({"column":"name","mode":"lower"})
+        )["preview"][0][0],
+        "  école  "
+    );
+    assert_eq!(
+        operation(
+            source,
+            "normalize-text",
+            json!({"column":"name","mode":"upper"})
+        )["preview"][1][0],
+        "STRASSE"
+    );
+    assert_eq!(
+        operation(
+            source,
+            "normalize-text",
+            json!({"column":"name","mode":"collapse-whitespace"})
+        )["preview"][2][0],
+        "A B"
+    );
+    assert!(fails(
+        source,
+        "normalize-text",
+        json!({"column":"name","mode":"locale"})
+    ));
+}
+
+#[test]
+fn multi_rename_is_atomic_and_drop_columns_preserves_order() {
+    let source = "first,last,temp\nAda,Lovelace,x\n";
+    let swapped = operation(
+        source,
+        "rename-columns",
+        json!({"mapping":{"first":"last","last":"first"}}),
+    );
+    assert_eq!(swapped["headers"], json!(["last", "first", "temp"]));
+    assert!(fails(
+        source,
+        "rename-columns",
+        json!({"mapping":{"first":"temp"}})
+    ));
+    let dropped = operation(source, "drop-columns", json!({"columns":["temp"]}));
+    assert_eq!(dropped["headers"], json!(["first", "last"]));
+    assert_eq!(dropped["preview"], json!([["Ada", "Lovelace"]]));
+    assert!(fails(
+        source,
+        "drop-columns",
+        json!({"columns":["first","last","temp"]})
+    ));
+}
+
+#[test]
+fn all_ten_new_transformations_replay_in_a_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input.csv");
+    let project = dir.path().join("project.json");
+    fs::write(
+        &input,
+        "name,team\nAda Lovelace,alpha\nAda Byron,alpha\nGrace Hopper,beta\n",
+    )
+    .unwrap();
+    fs::write(
+        &project,
+        json!({"schema_version":1,"steps":[
+            {"operation":"filter-contains","column":"name","value":"Ada"},
+            {"operation":"filter-not-contains","column":"name","value":"Byron"},
+            {"operation":"head-rows","rows":5},
+            {"operation":"tail-rows","rows":1},
+            {"operation":"drop-duplicates-by-columns","columns":["team"]},
+            {"operation":"add-index-column","name":"row","start":1},
+            {"operation":"add-constant-column","name":"group","value":"pilot"},
+            {"operation":"normalize-text","column":"name","mode":"lower"},
+            {"operation":"rename-columns","mapping":{"name":"participant"}},
+            {"operation":"drop-columns","columns":["team"]}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let outcome = handle(
+        Request {
+            operation: "run-project".into(),
+            input,
+            parameter: project.to_string_lossy().into_owned(),
+            ..Request::default()
+        },
+        Job::new(),
+    )
+    .unwrap();
+    let result: Value = serde_json::from_str(&outcome.preview).unwrap();
+    assert_eq!(result["headers"], json!(["participant", "row", "group"]));
+    assert_eq!(result["preview"], json!([["ada lovelace", "1", "pilot"]]));
+}
+
+#[test]
 fn all_ten_transformations_replay_in_a_version_one_project() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("input.csv");
