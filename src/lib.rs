@@ -32,7 +32,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs preserve inferred types in previews and Parquet output; CSV/TSV output serializes nulls as empty fields."},
- Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Version 1 projects keep their original text behavior unless they include `typed_schema`. Version 2 projects use the typed pipeline with inferred columns by default; optional `typed_schema` provides overrides and metadata. Typed projects support schema-aware filtering, stable sorts, shared bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving missing-value fills. Typed results are saved to a new .parquet file. Join paths are relative to the project file unless absolute."#},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Version 1 projects keep their original text behavior unless they include `typed_schema`. Version 2 projects use the typed pipeline with inferred columns by default; optional `typed_schema` provides overrides and metadata. Typed projects support schema-aware filters and numeric expressions, typed constant/index columns, atomic multi-column rename and drop, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving missing-value fills. Typed results are saved to a new .parquet file. Join paths are relative to the project file unless absolute."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
@@ -1226,6 +1226,10 @@ fn try_typed_basic_operation(
             | "sort"
             | "select-columns"
             | "rename-column"
+            | "rename-columns"
+            | "drop-columns"
+            | "add-index-column"
+            | "add-constant-column"
             | "drop-missing"
             | "drop-rows-any-missing"
             | "fill-missing"
@@ -1337,6 +1341,14 @@ fn try_typed_basic_operation(
             Step::Sort { column } => table.sort_by(&column, job)?,
             Step::SelectColumns { columns } => table.select_columns(&columns, job)?,
             Step::RenameColumn { column, name } => table.rename_column(&column, name)?,
+            Step::RenameColumns { mapping } => table.rename_columns(&mapping)?,
+            Step::DropColumns { columns } => table.drop_columns(&columns, job)?,
+            Step::AddIndexColumn { name, start } => table.add_index_column(name, start, job)?,
+            Step::AddConstantColumn {
+                name,
+                value,
+                value_type,
+            } => table.add_constant_column(name, &value, value_type, job)?,
             Step::DropMissing { column } => table.drop_missing(&column, job)?,
             Step::FillMissing { column, value } => table.fill_missing(&column, &value, job)?,
             Step::FillForward { column } => table.fill_direction(&column, true, job)?,

@@ -1294,6 +1294,138 @@ impl TypedTable {
         Ok(())
     }
 
+    /// Rename multiple columns atomically while preserving values and metadata.
+    pub(crate) fn rename_columns(
+        &mut self,
+        mapping: &std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        for old in mapping.keys() {
+            self.column_index(old)?;
+        }
+        let mut names = std::collections::HashSet::with_capacity(self.columns.len());
+        let proposed = self
+            .columns
+            .iter()
+            .map(|column| {
+                let name = mapping
+                    .get(&column.name)
+                    .cloned()
+                    .unwrap_or_else(|| column.name.clone());
+                validate_column_name(&name)?;
+                if !names.insert(name.clone()) {
+                    return Err(Error::input(
+                        "Renamed columns must have unique names; no partial rename was applied",
+                    ));
+                }
+                Ok(name)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (column, name) in self.columns.iter_mut().zip(proposed) {
+            column.name = name;
+        }
+        Ok(())
+    }
+
+    /// Drop named columns while retaining source order and at least one column.
+    pub(crate) fn drop_columns(&mut self, names: &[String], job: &Job) -> Result<()> {
+        if names.is_empty() {
+            return Err(Error::input("Select at least one column to drop"));
+        }
+        let mut dropped = std::collections::HashSet::with_capacity(names.len());
+        for name in names {
+            job.check()?;
+            self.column_index(name)?;
+            if !dropped.insert(name.as_str()) {
+                return Err(Error::input("A column was selected more than once"));
+            }
+        }
+        if dropped.len() >= self.columns.len() {
+            return Err(Error::input("At least one typed column must remain"));
+        }
+        self.columns
+            .retain(|column| !dropped.contains(column.name.as_str()));
+        Ok(())
+    }
+
+    /// Add a checked signed integer row index without changing existing columns.
+    pub(crate) fn add_index_column(&mut self, name: String, start: i64, job: &Job) -> Result<()> {
+        self.validate_new_column(&name)?;
+        let mut values = Vec::with_capacity(self.rows);
+        for row in 0..self.rows {
+            job.check()?;
+            let offset = i64::try_from(row)
+                .map_err(|_| Error::new(ErrorKind::Limit, "Index exceeds signed integer range"))?;
+            let value = start.checked_add(offset).ok_or_else(|| {
+                Error::input(format!(
+                    "Index column overflows signed integer at row {}",
+                    row + 1
+                ))
+            })?;
+            values.push(Scalar::Int64(value));
+        }
+        self.columns.push(Column {
+            name,
+            kind: ColumnType::Int64,
+            values,
+            raw_text: vec![None; self.rows],
+            categories: Vec::new(),
+            metadata: ColumnMetadata::default(),
+        });
+        Ok(())
+    }
+
+    /// Add a constant column using inferred or explicitly requested scalar type.
+    pub(crate) fn add_constant_column(
+        &mut self,
+        name: String,
+        literal: &str,
+        requested_type: Option<ColumnType>,
+        job: &Job,
+    ) -> Result<()> {
+        self.validate_new_column(&name)?;
+        let kind = requested_type.unwrap_or_else(|| infer_type(&[literal]));
+        let (one_value, categories) = convert_column(&name, kind, &[literal], job)?;
+        let value = one_value
+            .first()
+            .cloned()
+            .ok_or_else(|| Error::input("Constant column has no value"))?;
+        let raw = preserved_raw_text(literal, &value);
+        let values = (0..self.rows)
+            .map(|_| {
+                job.check()?;
+                Ok(value.clone())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.columns.push(Column {
+            name,
+            kind,
+            values,
+            raw_text: vec![raw; self.rows],
+            categories,
+            metadata: ColumnMetadata::default(),
+        });
+        Ok(())
+    }
+
+    fn validate_new_column(&self, name: &str) -> Result<()> {
+        validate_column_name(name)?;
+        if self.columns.len() >= MAX_COLS
+            || self
+                .rows
+                .saturating_mul(self.columns.len().saturating_add(1))
+                > MAX_CELLS
+        {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Added column would exceed the typed table limits",
+            ));
+        }
+        if self.columns.iter().any(|column| column.name == name) {
+            return Err(Error::input("Added column name must be unique"));
+        }
+        Ok(())
+    }
+
     /// Inner join two typed tables using exact type-aware keys; null keys never match.
     pub(crate) fn inner_join(
         mut self,

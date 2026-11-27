@@ -89,6 +89,147 @@ fn version_two_projects_use_typed_numeric_filters_and_shared_expressions() {
 }
 
 #[test]
+fn version_two_projects_add_rename_and_drop_columns_without_erasing_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input.csv");
+    let project = dir.path().join("project.json");
+    let output = dir.path().join("result.parquet");
+    let original = "id,value\n001,10\n002,20\n";
+    fs::write(&input, original).unwrap();
+    fs::write(
+        &project,
+        r#"{
+            "schema_version": 2,
+            "steps": [
+                {"operation":"add-index-column","name":"row_num","start":5},
+                {"operation":"add-constant-column","name":"cohort","value":"007","value_type":"int64"},
+                {"operation":"rename-columns","mapping":{"id":"sample_id","value":"measure"}},
+                {"operation":"drop-columns","columns":["row_num"]}
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    data_studio::handle(
+        Request {
+            operation: "run-project".into(),
+            input: input.clone(),
+            output: output.clone(),
+            parameter: project.to_string_lossy().into_owned(),
+            ..Request::default()
+        },
+        Job::new(),
+    )
+    .unwrap();
+
+    let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+    let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+        bytes::Bytes::from(bytes),
+    )
+    .unwrap();
+    let schema = reader.schema();
+    assert_eq!(
+        schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>(),
+        ["sample_id", "measure", "cohort"]
+    );
+    assert!(schema
+        .fields()
+        .iter()
+        .all(|field| field.data_type() == &arrow_schema::DataType::Int64));
+    let batch = reader.build().unwrap().next().unwrap().unwrap();
+    let cohort = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .unwrap();
+    assert_eq!(cohort.values(), &[7, 7]);
+    assert_eq!(fs::read_to_string(input).unwrap(), original);
+}
+
+#[test]
+fn standalone_column_operations_keep_typed_values_across_parquet_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.csv");
+    let with_constant = dir.path().join("with-constant.parquet");
+    let with_index = dir.path().join("with-index.parquet");
+    let renamed = dir.path().join("renamed.parquet");
+    let output = dir.path().join("selected.parquet");
+    let original = "sample,value\n001,10\n002,20\n";
+    fs::write(&source, original).unwrap();
+
+    let run =
+        |operation: &str, input: &std::path::Path, output: &std::path::Path, parameter: &str| {
+            data_studio::handle(
+                Request {
+                    operation: operation.into(),
+                    input: input.to_path_buf(),
+                    output: output.to_path_buf(),
+                    parameter: parameter.into(),
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+            .unwrap();
+        };
+
+    run(
+        "add-constant-column",
+        &source,
+        &with_constant,
+        r#"{"name":"cohort","value":"7","value_type":"int64"}"#,
+    );
+    run(
+        "add-index-column",
+        &with_constant,
+        &with_index,
+        r#"{"name":"row_number","start":10}"#,
+    );
+    run(
+        "rename-columns",
+        &with_index,
+        &renamed,
+        r#"{"mapping":{"sample":"sample_id","value":"measure"}}"#,
+    );
+    run(
+        "drop-columns",
+        &renamed,
+        &output,
+        r#"{"columns":["row_number"]}"#,
+    );
+
+    let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+    let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+        bytes::Bytes::from(bytes),
+    )
+    .unwrap();
+    let schema = reader.schema();
+    assert_eq!(
+        schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>(),
+        ["sample_id", "measure", "cohort"]
+    );
+    assert!(schema
+        .fields()
+        .iter()
+        .all(|field| field.data_type() == &arrow_schema::DataType::Int64));
+    let batch = reader.build().unwrap().next().unwrap().unwrap();
+    let values = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .unwrap();
+    assert_eq!(values.values(), &[7, 7]);
+    assert_eq!(fs::read_to_string(source).unwrap(), original);
+}
+
+#[test]
 fn ordinary_csv_numeric_filters_use_typed_values_and_keep_source() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("input.csv");
