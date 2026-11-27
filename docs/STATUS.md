@@ -84,8 +84,8 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
 | correlation | Pearson coefficient on complete numeric pairs | Linux fixture-tested |
-| line-chart | Monochrome vector lines in table order | Linux fixture-tested |
-| scatter | Monochrome scatter SVG, 800 x 600 | implemented-unverified |
+| line-chart | Monochrome labeled vector lines in table order; legacy and JSON parameters | Linux fixture-tested |
+| scatter | Monochrome labeled scatter SVG, 800 x 600; legacy and JSON parameters | Linux fixture-tested |
 
 ## Known gaps
 

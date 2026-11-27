@@ -93,8 +93,8 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"reverse-rows",label:"Reverse row order",hint:"Reverses table rows without changing their cell values."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
- Operation{id:"line-chart",label:"Line chart SVG",hint:"Enter x-column,y-column. Complete numeric rows connect in table order. Choose a new .svg file."},
- Operation{id:"scatter",label:"Scatter SVG",hint:"Parameter: x-column,y-column. Numeric complete rows, new .svg output."},
+ Operation{id:"line-chart",label:"Line chart SVG",hint:r#"Enter x-column,y-column or JSON {"x":"…","y":"…","title":"…","x_axis":"…","y_axis":"…"}. Complete numeric rows connect in table order. Choose a new .svg file."#},
+ Operation{id:"scatter",label:"Scatter SVG",hint:r#"Enter x-column,y-column or JSON with x, y, title, x_axis and y_axis. Numeric complete rows, new .svg output."#},
  Operation{id:"export",label:"Export",hint:"Export to .csv, .tsv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
 pub(crate) struct Table {
@@ -756,6 +756,60 @@ fn column_pair(table: &Table, parameter: &str) -> Result<(usize, usize)> {
     Ok((column(table, x)?, column(table, y)?))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FigureParameters {
+    x: String,
+    y: String,
+    title: Option<String>,
+    x_axis: Option<String>,
+    y_axis: Option<String>,
+}
+
+fn figure_request(
+    table: &Table,
+    parameter: &str,
+    operation: &str,
+) -> Result<(usize, usize, String, String, String)> {
+    let (x, y, title, x_axis, y_axis) = if parameter.trim_start().starts_with('{') {
+        let request: FigureParameters = serde_json::from_str(parameter)
+            .map_err(|error| Error::input(format!("Invalid figure parameter JSON: {error}")))?;
+        let x_index = column(table, &request.x)?;
+        let y_index = column(table, &request.y)?;
+        (
+            x_index,
+            y_index,
+            request.title.unwrap_or_else(|| {
+                if operation == "line-chart" {
+                    "Line chart".into()
+                } else {
+                    "Scatter plot".into()
+                }
+            }),
+            request
+                .x_axis
+                .unwrap_or_else(|| table.headers[x_index].clone()),
+            request
+                .y_axis
+                .unwrap_or_else(|| table.headers[y_index].clone()),
+        )
+    } else {
+        let (x, y) = column_pair(table, parameter)?;
+        (
+            x,
+            y,
+            if operation == "line-chart" {
+                "Line chart".into()
+            } else {
+                "Scatter plot".into()
+            },
+            table.headers[x].clone(),
+            table.headers[y].clone(),
+        )
+    };
+    Ok((x, y, title, x_axis, y_axis))
+}
+
 fn numeric_value(value: &str) -> Result<Option<f64>> {
     if value.trim().is_empty() {
         return Ok(None);
@@ -1399,7 +1453,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             linear_regression(&t, x, y, &j)?
         }
         "scatter" | "line-chart" => {
-            let (a, b) = column_pair(&t, &r.parameter)?;
+            let (a, b, title, x_axis, y_axis) = figure_request(&t, &r.parameter, &r.operation)?;
             if r.output.extension().and_then(|x| x.to_str()) != Some("svg") {
                 return Err(Error::input("Expected .svg"));
             }
@@ -1417,10 +1471,29 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                     row[b].trim().parse().map_err(err)?,
                 ));
             }
+            let labels = localwright_core::figure::FigureLabels {
+                title: &title,
+                x_axis: &x_axis,
+                y_axis: &y_axis,
+            };
             if r.operation == "line-chart" {
-                localwright_core::figure::export_line(&r.output, &points, 800, 600)?;
+                localwright_core::figure::export_line_svg_labeled(
+                    &r.output,
+                    &points,
+                    800,
+                    600,
+                    localwright_core::figure::SeriesStyle::MONOCHROME,
+                    labels,
+                )?;
             } else {
-                localwright_core::figure::export_scatter(&r.output, &points, 800, 600)?;
+                localwright_core::figure::export_scatter_svg_labeled(
+                    &r.output,
+                    &points,
+                    800,
+                    600,
+                    localwright_core::figure::SeriesStyle::MONOCHROME,
+                    labels,
+                )?;
             }
             written = Some(r.output);
             format!(
@@ -2697,8 +2770,33 @@ mod tests {
         .unwrap();
         assert!(result.preview.contains("3 complete cases"));
         let chart = std::fs::read_to_string(output).unwrap();
-        assert!(chart.contains(r#"points=" 780.000,550.000 60.000,20.000 420.000,285.000""#));
+        assert!(chart.contains(r#"points=" 776.000,534.000 72.000,40.000 424.000,287.000""#));
+        assert!(chart.contains(">x</text>"));
+        assert!(chart.contains(">y</text>"));
         assert!(!chart.contains("<image"));
+    }
+
+    #[test]
+    fn scientific_figure_accepts_validated_labels_from_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("series.csv");
+        let output = dir.path().join("series.svg");
+        std::fs::write(&input, "x,y\n1,2\n2,3\n").unwrap();
+        handle(
+            Request {
+                operation: "scatter".into(),
+                input,
+                output: output.clone(),
+                parameter: r#"{"x":"x","y":"y","title":"Group <A>","x_axis":"Time (s)","y_axis":"Value <m>"}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let chart = std::fs::read_to_string(output).unwrap();
+        assert!(chart.contains("Group &lt;A&gt;"));
+        assert!(chart.contains("Time (s)"));
+        assert!(chart.contains("Value &lt;m&gt;"));
     }
 
     #[test]

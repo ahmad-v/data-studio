@@ -13,7 +13,7 @@ This independent studio uses Localwright at source level. There is no separate m
 - Exact-match filter over delimited text or supported scalar Parquet converted to text (implemented-unverified).
 - Numeric column n, missing, mean, sample SD, min/max (implemented-unverified).
 - CSV formula guard; Parquet UTF-8 columns (implemented-unverified).
-- Monochrome scatter SVG, 800 x 600 (implemented-unverified).
+- Monochrome scientific line and scatter SVGs with visible titles and axis labels; existing `x,y` parameters remain supported (Linux unit fixtures pass; cross-platform workflow pending).
 
 The project is intended to remain free, local and offline, without tracking, advertising, subscriptions or premium features. See [the manifesto](MANIFESTO.md) for the motivation behind it.
 

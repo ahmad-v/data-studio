@@ -28,7 +28,7 @@ No capability is marked device-verified or released. The merged typed-processing
 | export | CSV formula guard; Parquet UTF-8 columns | implemented-unverified |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
 | correlation | Pearson coefficient on complete numeric pairs | Linux fixture-tested |
-| line-chart | Monochrome vector lines in table order | Linux fixture-tested |
-| scatter | Monochrome scatter SVG, 800 x 600 | implemented-unverified |
+| line-chart | Monochrome labeled vector lines in table order; legacy and JSON parameters | Linux fixture-tested |
+| scatter | Monochrome labeled scatter SVG, 800 x 600; legacy and JSON parameters | Linux fixture-tested |
 
 See section 04-07 and 10 of the master specification for complete targets.
