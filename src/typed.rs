@@ -971,19 +971,22 @@ impl TypedTable {
                 });
                 index
             };
-            let Some(value) = scalar_to_f64(value_column, &value_column.values[row]).map_err(
-                |error| {
+            let Some(value) =
+                scalar_to_f64(value_column, &value_column.values[row]).map_err(|error| {
                     Error::new(
                         error.kind,
                         format!("Aggregation failed on row {}: {}", row + 1, error.message),
                     )
-                },
-            )? else {
+                })?
+            else {
                 continue;
             };
             let group = &mut groups[group_index];
             let next_count = group.count.checked_add(1).ok_or_else(|| {
-                Error::new(ErrorKind::Limit, "Grouped value count exceeds the supported range")
+                Error::new(
+                    ErrorKind::Limit,
+                    "Grouped value count exceeds the supported range",
+                )
             })?;
             if mean {
                 let result = if group.count == 0 {

@@ -1936,11 +1936,18 @@ mod tests {
             .unwrap();
 
             let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
-            let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+            let reader =
+                ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
             let schema = reader.schema();
             assert_eq!(schema.field(0).name(), "group");
-            assert_eq!(schema.field(0).data_type(), &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)));
-            assert_eq!(schema.field(0).metadata()["localwright.label"], "Study group");
+            assert_eq!(
+                schema.field(0).data_type(),
+                &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+            );
+            assert_eq!(
+                schema.field(0).metadata()["localwright.label"],
+                "Study group"
+            );
             assert_eq!(schema.field(1).name(), aggregate_name);
             assert_eq!(schema.field(1).data_type(), &DataType::Float64);
             assert_eq!(schema.field(1).metadata()["localwright.unit"], "items");
@@ -1948,7 +1955,11 @@ mod tests {
             let batch = batches.next().unwrap().unwrap();
             assert_eq!(batch.num_rows(), 4);
             assert!(batch.column(0).is_null(2)); // Missing keys form one group.
-            let aggregate = batch.column(1).as_any().downcast_ref::<arrow_array::Float64Array>().unwrap();
+            let aggregate = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<arrow_array::Float64Array>()
+                .unwrap();
             assert_eq!(aggregate.value(0), expected[0]);
             assert_eq!(aggregate.value(1), expected[1]);
             assert_eq!(aggregate.value(2), expected[2]);
