@@ -1394,11 +1394,23 @@ impl TypedTable {
     }
 
     pub(crate) fn head_rows(&mut self, count: usize, job: &Job) -> Result<()> {
+        if count > MAX_CELLS {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Row window exceeds the 500,000-row limit",
+            ));
+        }
         let count = count.min(self.rows);
         self.reorder_rows(&(0..count).collect::<Vec<_>>(), job)
     }
 
     pub(crate) fn tail_rows(&mut self, count: usize, job: &Job) -> Result<()> {
+        if count > MAX_CELLS {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Row window exceeds the 500,000-row limit",
+            ));
+        }
         let start = self.rows.saturating_sub(count);
         self.reorder_rows(&(start..self.rows).collect::<Vec<_>>(), job)
     }
