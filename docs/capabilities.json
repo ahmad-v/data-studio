@@ -51,7 +51,7 @@
     },
     {
       "operation": "preview",
-      "description": "CSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview",
+      "description": "CSV, named or first XLSX sheet, or supported flat scalar Parquet preview cast to text",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
@@ -66,6 +66,15 @@
         "x86_64-unknown-linux-gnu"
       ],
       "fixture_status": "Typed inference and user-route fixtures passed in the Linux test suite; hosted native matrix pending"
+    },
+    {
+      "operation": "export-typed-parquet",
+      "description": "Write typed Arrow/Parquet scalar columns, categorical dictionaries, nulls, labels and units from validated inferred or explicit schema",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Linux round-trip and rejection fixtures passed for scalar types, nulls, categorical dictionary, UTC timestamp normalization, metadata, and no-overwrite; hosted verification pending"
     },
     {
       "operation": "filter",

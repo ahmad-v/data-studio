@@ -10,4 +10,6 @@ The distribution workflow creates unsigned development previews, not installers.
 
 The XLSX and Parquet stack uses Calamine 0.38.0, ZIP 9.0.5 and Arrow/Parquet 57.3.3. These pins address advisories in the previous lock candidates for Calamine, ZIP, Quick-XML, Arrow Data and Thrift. The updated spreadsheet stack requires Rust 1.88.
 
+The typed-Parquet route adds `arrow-cast 57.3.3` as a direct dependency; it was already in the locked graph through Arrow/Parquet, so this did not add a new package version. RustSec audit of the updated lockfile reported no vulnerabilities. It did report eight unmaintained-dependency advisories with no fixed versions available at this review: `chrono 0.4.45`, `instant 0.1.13`, `paste 1.0.15`, `pin-utils 0.1.1`, `rustybuzz 0.14.1`, and `ttf-parser` 0.20.0, 0.21.1 and 0.25.1. These arrive through Arrow/Parquet and the pinned Iced font/toolkit graph; continue tracking them during dependency review.
+
 Read-only SQL uses the bundled SQLite 3.54.1 source from the pinned `libsqlite3-sys 0.40.0` lock entry and the MIT-licensed Rust wrapper `rusqlite 0.43.0`. The engine is compiled into Data Studio and does not require a host SQLite command or library. See the upstream [SQLite copyright and public-domain declaration](https://sqlite.org/copyright.html). The final release audit must separately review the native version.

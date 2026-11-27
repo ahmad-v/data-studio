@@ -16,8 +16,9 @@ use parquet::{
 use project::{Project, Step};
 use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
- Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or UTF-8 Parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
+ Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or supported flat scalar Parquet columns as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"inspect-schema",label:"Inspect typed schema",hint:r#"Optional JSON: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates per-column types and missing values without changing source data. Optional new .json report."#},
+ Operation{id:"export-typed-parquet",label:"Export typed Parquet",hint:r#"Required JSON schema options: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates primitive types, nulls and categoricals, then writes a new typed .parquet file."#},
  Operation{id:"filter",label:"Filter",hint:"Exact text match: parameter column=value. Optional .csv, .tsv or .parquet output."},
  Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. Optional new CSV or Parquet output."},
  Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. Stable ascending text order. Optional CSV, TSV or Parquet output."},
@@ -125,6 +126,34 @@ pub(crate) fn validate(headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<T
     }
     Ok(Table { headers, rows })
 }
+fn supported_parquet_type(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Dictionary(key, value) => {
+            key.as_ref() == &DataType::Int32 && value.as_ref() == &DataType::Utf8
+        }
+        scalar => matches!(
+            scalar,
+            DataType::Utf8
+                | DataType::Boolean
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Timestamp(_, _)
+        ),
+    }
+}
+
 fn load_parquet(bytes: Vec<u8>, job: &Job) -> Result<Table> {
     const MAX_ROW_GROUPS: usize = 256;
     const MAX_DECODED_BYTES: u64 = 32 * 1024 * 1024;
@@ -137,10 +166,10 @@ fn load_parquet(bytes: Vec<u8>, job: &Job) -> Result<Table> {
     }
     if fields
         .iter()
-        .any(|field| field.data_type() != &DataType::Utf8)
+        .any(|field| !supported_parquet_type(field.data_type()))
     {
         return Err(Error::input(
-            "Parquet import supports flat UTF-8 string columns only",
+            "Parquet import supports flat scalar columns only; nested and binary columns are rejected",
         ));
     }
     let headers = fields
@@ -185,14 +214,18 @@ fn load_parquet(bytes: Vec<u8>, job: &Job) -> Result<Table> {
         if rows.len().saturating_add(batch.num_rows()) > expected_rows {
             return Err(Error::input("Parquet data exceeds declared row count"));
         }
-        let columns = batch
+        let converted = batch
             .columns()
+            .iter()
+            .map(|array| arrow_cast::cast(array.as_ref(), &DataType::Utf8).map_err(err))
+            .collect::<Result<Vec<_>>>()?;
+        let columns = converted
             .iter()
             .map(|array| {
                 array
                     .as_any()
                     .downcast_ref::<StringArray>()
-                    .ok_or_else(|| Error::input("Unexpected Parquet column type"))
+                    .ok_or_else(|| Error::input("Arrow scalar conversion did not yield text"))
             })
             .collect::<Result<Vec<_>>>()?;
         for index in 0..batch.num_rows() {
@@ -1033,8 +1066,28 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             ..Outcome::default()
         });
     }
+    if r.operation == "export-typed-parquet" {
+        if !r
+            .output
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("parquet"))
+        {
+            return Err(Error::input("Typed data requires a new .parquet output"));
+        }
+        let schema_request = typed::SchemaRequest::from_json(&r.parameter)?;
+        let table = typed::TypedTable::infer(&t, schema_request, &j)?;
+        table.write_parquet(&r.output, &j)?;
+        let report = serde_json::to_string_pretty(&table.schema_report())?;
+        return Ok(Outcome {
+            preview: report,
+            written: Some(r.output),
+            warnings: vec!["Parquet columns carry inferred or explicitly validated Arrow types. Offset-aware datetimes normalize to UTC; columns that mix aware and naive timestamps are rejected. Labels and units are stored as field metadata. The source remains unchanged.".into()],
+            ..Outcome::default()
+        });
+    }
     let mut written = None;
-    let mut warnings = vec!["Text-only import: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import accepts flat uncompressed UTF-8 columns and treats nulls as blank text.".into()];
+    let mut warnings = vec!["Transformation operations still use text cells: XLSX formatting, formulas, types and additional sheets are not preserved. Delimited-text export prefixes formula-like cells; Parquet import casts supported flat uncompressed scalar columns to text and represents nulls as blanks.".into()];
     let preview = match r.operation.as_str() {
         "counts" => value_counts(&t, column(&t, &r.parameter)?, &j)?,
         "summary" => summary(&t, column(&t, &r.parameter)?, &j)?,
@@ -1653,6 +1706,81 @@ mod tests {
 
         assert!(handle(request, Job::new()).is_err());
         assert_eq!(std::fs::read_to_string(&output).unwrap(), outcome.preview);
+    }
+
+    #[test]
+    fn typed_parquet_export_roundtrips_arrow_types_nulls_and_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("typed.csv");
+        let output = directory.path().join("typed.parquet");
+        let source = concat!(
+            "active,count,large,score,date,time,when,group,note,empty\n",
+            "yes,-2,18446744073709551615,1.25,2024-02-29,12:30:01.25,2024-02-29T12:30:01+02:30,A,hello,\n",
+            "no,4,8,2.5,2025-01-01,00:00:00,2025-01-01T00:00:00Z,B,world,\n",
+        );
+        std::fs::write(&input, source).unwrap();
+        let outcome = handle(
+            Request {
+                operation: "export-typed-parquet".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: r#"{"overrides":{"group":"categorical"},"metadata":{"score":{"label":"Measured score","unit":"points"}}}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(outcome.written, Some(output.clone()));
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), source);
+
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let schema = reader.schema();
+        assert_eq!(schema.field(0).data_type(), &DataType::Boolean);
+        assert_eq!(schema.field(1).data_type(), &DataType::Int64);
+        assert_eq!(schema.field(2).data_type(), &DataType::UInt64);
+        assert_eq!(schema.field(3).data_type(), &DataType::Float64);
+        assert_eq!(schema.field(4).data_type(), &DataType::Date32);
+        assert_eq!(
+            schema.field(5).data_type(),
+            &DataType::Time64(arrow_schema::TimeUnit::Nanosecond)
+        );
+        assert!(matches!(
+            schema.field(6).data_type(),
+            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, Some(_))
+        ));
+        assert!(matches!(
+            schema.field(7).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+        assert_eq!(
+            schema.field(3).metadata()["localwright.label"],
+            "Measured score"
+        );
+        assert_eq!(schema.field(3).metadata()["localwright.unit"], "points");
+
+        let imported = load(&output, None, &Job::new()).unwrap();
+        assert_eq!(
+            imported.headers,
+            [
+                "active", "count", "large", "score", "date", "time", "when", "group", "note",
+                "empty"
+            ]
+        );
+        assert_eq!(imported.rows[0][2], "18446744073709551615");
+        assert_eq!(imported.rows[0][4], "2024-02-29");
+        assert_eq!(imported.rows[0][7], "A");
+        assert_eq!(imported.rows[0][9], "");
+        assert!(handle(
+            Request {
+                operation: "export-typed-parquet".into(),
+                input,
+                output,
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .is_err());
     }
 
     #[test]

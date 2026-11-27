@@ -1,7 +1,17 @@
 use crate::{Table, MAX_CELLS, MAX_COLS};
-use localwright_core::{Error, ErrorKind, Job, Result};
+use arrow_array::{
+    types::Int32Type, Array, ArrayRef, BooleanArray, Date32Array, DictionaryArray, Float64Array,
+    Int32Array, Int64Array, StringArray, Time64NanosecondArray, TimestampNanosecondArray,
+    UInt64Array,
+};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use localwright_core::{write_new, Error, ErrorKind, Job, Result};
+use parquet::arrow::ArrowWriter;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 const MAX_SCHEMA_PARAMETER_BYTES: usize = 16 * 1024;
 const MAX_METADATA_CHARS: usize = 256;
@@ -90,6 +100,42 @@ struct DateTime {
     date: Date,
     time: Time,
     offset_minutes: Option<i16>,
+}
+
+impl Date {
+    fn days_since_epoch(self) -> i32 {
+        let mut year = self.year;
+        year -= i32::from(self.month <= 2);
+        let era = year.div_euclid(400);
+        let year_of_era = year - era * 400;
+        let month = i32::from(self.month);
+        let day_of_year =
+            (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i32::from(self.day) - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        era * 146_097 + day_of_era - 719_468
+    }
+}
+
+impl Time {
+    fn nanoseconds_since_midnight(self) -> i64 {
+        i64::from(self.seconds) * 1_000_000_000 + i64::from(self.nanoseconds)
+    }
+}
+
+impl DateTime {
+    fn nanoseconds_since_epoch(self) -> Result<i64> {
+        let seconds = i64::from(self.date.days_since_epoch())
+            .checked_mul(86_400)
+            .and_then(|seconds| seconds.checked_add(i64::from(self.time.seconds)))
+            .and_then(|seconds| {
+                seconds.checked_sub(i64::from(self.offset_minutes.unwrap_or(0)) * 60)
+            })
+            .ok_or_else(|| Error::input("Datetime is outside Arrow's timestamp range"))?;
+        seconds
+            .checked_mul(1_000_000_000)
+            .and_then(|nanos| nanos.checked_add(i64::from(self.time.nanoseconds)))
+            .ok_or_else(|| Error::input("Datetime is outside Arrow's nanosecond timestamp range"))
+    }
 }
 
 #[derive(Debug)]
@@ -202,6 +248,228 @@ impl TypedTable {
             "missing_semantics": "empty or whitespace-only cells are null; other text is preserved",
         })
     }
+
+    pub(crate) fn write_parquet(&self, path: &std::path::Path, job: &Job) -> Result<()> {
+        let mut fields = Vec::with_capacity(self.columns.len());
+        let mut arrays = Vec::with_capacity(self.columns.len());
+        for column in &self.columns {
+            job.check()?;
+            let (data_type, array, mut metadata) = arrow_column(column)?;
+            let nullable = column
+                .values
+                .iter()
+                .any(|value| matches!(value, Scalar::Null));
+            metadata.insert(
+                "localwright.logical_type".into(),
+                format!("{:?}", column.kind).to_ascii_lowercase(),
+            );
+            if let Some(label) = &column.metadata.label {
+                metadata.insert("localwright.label".into(), label.clone());
+            }
+            if let Some(unit) = &column.metadata.unit {
+                metadata.insert("localwright.unit".into(), unit.clone());
+            }
+            fields.push(Field::new(&column.name, data_type, nullable).with_metadata(metadata));
+            arrays.push(array);
+        }
+        let schema = Arc::new(Schema::new(fields));
+        let batch = arrow_array::RecordBatch::try_new(schema.clone(), arrays)
+            .map_err(|error| Error::input(error.to_string()))?;
+        job.check()?;
+        write_new(path, |file| {
+            let mut writer = ArrowWriter::try_new(file, schema, None)
+                .map_err(|error| Error::input(error.to_string()))?;
+            writer
+                .write(&batch)
+                .map_err(|error| Error::input(error.to_string()))?;
+            job.check()?;
+            writer
+                .close()
+                .map_err(|error| Error::input(error.to_string()))?;
+            Ok(())
+        })
+    }
+}
+
+fn arrow_column(column: &Column) -> Result<(DataType, ArrayRef, HashMap<String, String>)> {
+    let mut metadata = HashMap::new();
+    let (data_type, array): (DataType, ArrayRef) = match column.kind {
+        ColumnType::Null => {
+            metadata.insert("localwright.logical_type".into(), "null".into());
+            (
+                DataType::Utf8,
+                Arc::new(StringArray::from(vec![None::<&str>; column.values.len()])),
+            )
+        }
+        ColumnType::Boolean => (
+            DataType::Boolean,
+            Arc::new(BooleanArray::from(
+                column
+                    .values
+                    .iter()
+                    .map(|value| match value {
+                        Scalar::Null => None,
+                        Scalar::Boolean(value) => Some(*value),
+                        _ => unreachable!("typed scalar matches its column kind"),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        ColumnType::Int64 => (
+            DataType::Int64,
+            Arc::new(Int64Array::from(
+                column
+                    .values
+                    .iter()
+                    .map(|value| match value {
+                        Scalar::Null => None,
+                        Scalar::Int64(value) => Some(*value),
+                        _ => unreachable!("typed scalar matches its column kind"),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        ColumnType::UInt64 => (
+            DataType::UInt64,
+            Arc::new(UInt64Array::from(
+                column
+                    .values
+                    .iter()
+                    .map(|value| match value {
+                        Scalar::Null => None,
+                        Scalar::UInt64(value) => Some(*value),
+                        _ => unreachable!("typed scalar matches its column kind"),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        ColumnType::Float64 => (
+            DataType::Float64,
+            Arc::new(Float64Array::from(
+                column
+                    .values
+                    .iter()
+                    .map(|value| match value {
+                        Scalar::Null => None,
+                        Scalar::Float64(value) => Some(*value),
+                        _ => unreachable!("typed scalar matches its column kind"),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        ColumnType::Date => (
+            DataType::Date32,
+            Arc::new(Date32Array::from(
+                column
+                    .values
+                    .iter()
+                    .map(|value| match value {
+                        Scalar::Null => None,
+                        Scalar::Date(date) => Some(date.days_since_epoch()),
+                        _ => unreachable!("typed scalar matches its column kind"),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        ColumnType::Time => (
+            DataType::Time64(TimeUnit::Nanosecond),
+            Arc::new(Time64NanosecondArray::from(
+                column
+                    .values
+                    .iter()
+                    .map(|value| match value {
+                        Scalar::Null => None,
+                        Scalar::Time(time) => Some(time.nanoseconds_since_midnight()),
+                        _ => unreachable!("typed scalar matches its column kind"),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        ColumnType::DateTime => {
+            let offsets = column
+                .values
+                .iter()
+                .filter_map(|value| match value {
+                    Scalar::DateTime(value) => Some(value.offset_minutes.is_some()),
+                    _ => None,
+                })
+                .collect::<std::collections::HashSet<_>>();
+            if offsets.len() > 1 {
+                return Err(Error::input(format!(
+                    "Datetime column {:?} mixes timezone-aware and timezone-naive values",
+                    column.name
+                )));
+            }
+            let aware = offsets.contains(&true);
+            let values = column
+                .values
+                .iter()
+                .map(|value| match value {
+                    Scalar::Null => Ok(None),
+                    Scalar::DateTime(value) => value.nanoseconds_since_epoch().map(Some),
+                    _ => unreachable!("typed scalar matches its column kind"),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            metadata.insert(
+                "localwright.datetime_semantics".into(),
+                if aware {
+                    "offset-aware values normalized to UTC"
+                } else {
+                    "timezone-naive wall-clock values"
+                }
+                .into(),
+            );
+            let array = TimestampNanosecondArray::from(values);
+            if aware {
+                (
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+00:00"))),
+                    Arc::new(array.with_timezone("+00:00")),
+                )
+            } else {
+                (
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    Arc::new(array),
+                )
+            }
+        }
+        ColumnType::Categorical => {
+            let keys = column
+                .values
+                .iter()
+                .map(|value| match value {
+                    Scalar::Null => Ok(None),
+                    Scalar::Categorical(key) => i32::try_from(*key).map(Some).map_err(|_| {
+                        Error::new(
+                            ErrorKind::Limit,
+                            "Categorical dictionary exceeds Int32 keys",
+                        )
+                    }),
+                    _ => unreachable!("typed scalar matches its column kind"),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let dictionary = DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::new(StringArray::from(column.categories.clone())),
+            )
+            .map_err(|error| Error::input(error.to_string()))?;
+            (dictionary.data_type().clone(), Arc::new(dictionary))
+        }
+        ColumnType::String => (
+            DataType::Utf8,
+            Arc::new(StringArray::from(
+                column
+                    .values
+                    .iter()
+                    .map(|value| match value {
+                        Scalar::Null => None,
+                        Scalar::String(value) => Some(value.as_str()),
+                        _ => unreachable!("typed scalar matches its column kind"),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+    };
+    Ok((data_type, array, metadata))
 }
 
 fn infer_type(cells: &[&str]) -> ColumnType {
@@ -633,5 +901,23 @@ mod tests {
             typed.schema_report()["columns"][0]["type"],
             json!("categorical")
         );
+    }
+
+    #[test]
+    fn parquet_export_rejects_mixed_datetime_semantics_and_out_of_range_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("invalid.parquet");
+        let mixed = table(
+            vec!["when"],
+            vec![vec!["2025-01-01T12:00:00Z"], vec!["2025-01-01T12:00:00"]],
+        );
+        let typed = TypedTable::infer(&mixed, SchemaRequest::default(), &Job::new()).unwrap();
+        assert!(typed.write_parquet(&output, &Job::new()).is_err());
+        assert!(!output.exists());
+
+        let old = table(vec!["when"], vec![vec!["0001-01-01T00:00:00Z"]]);
+        let typed = TypedTable::infer(&old, SchemaRequest::default(), &Job::new()).unwrap();
+        assert!(typed.write_parquet(&output, &Job::new()).is_err());
+        assert!(!output.exists());
     }
 }

@@ -1,6 +1,6 @@
 # Format and operation compatibility
 
-Nothing is verified on a native target. The machine-readable registry is a development inventory, not an advertised capability list.
+No capability is marked device-verified or released. Linux and Windows hosted checks passed on the previous pull request head; the current typed Parquet change needs its own five-target verification. The machine-readable registry is a development inventory, not an advertised capability list.
 
 | Operation | Route | Evidence status |
 |---|---|---|
@@ -8,6 +8,8 @@ Nothing is verified on a native target. The machine-readable registry is a devel
 | fill-missing | Fill blanks in a selected column | Linux fixture-tested |
 | rename-column | Rename a table header | Linux fixture-tested |
 | preview | CSV / first XLSX sheet text preview | implemented-unverified |
+| inspect-schema | Infer or validate scalar types and metadata | Linux fixture-tested; native matrix pending |
+| export-typed-parquet | Arrow scalar, temporal and categorical Parquet export with import round-trip | Linux fixture-tested; native matrix pending |
 | filter | Exact-match filter; CSV or string Parquet | implemented-unverified |
 | sort | Stable ascending text sort by one column | Linux fixture-tested |
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |

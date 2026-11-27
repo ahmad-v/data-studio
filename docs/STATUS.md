@@ -9,8 +9,9 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | rename-column | Rename a table header | Linux fixture-tested |
 | select-columns | Select and reorder table columns | Linux fixture-tested |
 | counts | Exact value counts for a column | Linux fixture-tested |
-| preview | CSV, TSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview | Linux fixture-tested |
+| preview | CSV, TSV, named or first XLSX sheet, or supported flat scalar Parquet cast to text | Linux fixture-tested |
 | inspect-schema | Infer or explicitly validate a columnar schema; report types, nulls, categorical dictionary counts, labels and units without modifying input | Linux unit and route fixtures passed; five-target hosted verification pending |
+| export-typed-parquet | Write a validated or inferred typed Arrow schema, including nulls, temporal types, category dictionaries and label/unit metadata | Linux round-trip/rejection fixtures passed; hosted native matrix pending |
 | filter | Exact-match filter; CSV or string Parquet | Linux fixture-tested |
 | sort | Stable ascending text sort by one column | Linux fixture-tested |
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
@@ -86,6 +87,6 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 
 ## Known gaps
 
-Existing transformations still run on the legacy in-memory string table. The new schema inspection path builds a bounded typed columnar view with integer, unsigned, float, boolean, date, time, datetime, categorical and string values, plus explicit overrides and labels/units; it does not yet replace the transformation pipeline, persist exact types in projects, or preserve typed Parquet data. Large-data virtualization, typed editing, general formulas, regex transforms, multi-key/duplicate-aggregating pivots, project editor, undo, batch runs, other formats, authoritative palettes and full scientific export remain open. XLSX ZIP expansion and range allocation occur in the dependency before cell limit; hostile workbooks are not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; it is not a proof of spreadsheet safety.
+Existing transformations still run on the legacy in-memory string table. Typed schema inspection now connects to typed Parquet import/export for scalar values, nulls, categories and Arrow field labels/units, but typed values are not yet retained through project pipelines or transformations. Large-data virtualization, typed editing, general formulas, regex transforms, multi-key/duplicate-aggregating pivots, project editor, undo, batch runs, other formats, authoritative palettes and full scientific export remain open. XLSX ZIP expansion and range allocation occur in the dependency before cell limit; hostile workbooks are not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; it is not a proof of spreadsheet safety.
 
 Hosted matrix, device, and packaging verification remain open. See [verification evidence](VERIFICATION.md) and [dependency review](DEPENDENCIES.md).

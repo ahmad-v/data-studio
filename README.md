@@ -8,7 +8,8 @@ This independent studio uses Localwright at source level. There is no separate m
 
 - CSV / first XLSX sheet text preview (implemented-unverified).
 - `inspect-schema` builds a typed columnar schema view with inference, explicit overrides, null counts, categorical dictionary counts, labels and units; it leaves source cells unchanged.
-- Exact-match filter; CSV or string Parquet (implemented-unverified).
+- `export-typed-parquet` validates that schema and writes typed Arrow/Parquet scalar columns, nulls, categories, and label/unit metadata; Parquet imports accept supported flat scalar types.
+- Exact-match filter over delimited text or supported scalar Parquet converted to text (implemented-unverified).
 - Numeric column n, missing, mean, sample SD, min/max (implemented-unverified).
 - CSV formula guard; Parquet UTF-8 columns (implemented-unverified).
 - Monochrome scatter SVG, 800 x 600 (implemented-unverified).

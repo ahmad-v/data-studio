@@ -651,6 +651,7 @@ name = "data-studio"
 version = "0.1.0-alpha.1"
 dependencies = [
  "arrow-array",
+ "arrow-cast",
  "arrow-schema",
  "bytes",
  "calamine",

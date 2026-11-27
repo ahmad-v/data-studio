@@ -6,6 +6,7 @@ Development source only. Launch the GUI after compiling. Choose an operation, en
 - `counts`: Counts exact cell values, including blank text. The preview reports the 30 most frequent values and the total number of distinct values.
 - `preview`: Preview CSV, XLSX or Parquet as text. For XLSX preview and export, enter the exact worksheet name or leave the parameter blank to use the first sheet.
 - `inspect-schema`: Leave Parameter blank to infer column types, or pass JSON such as `{"overrides":{"score":"float64"},"metadata":{"score":{"label":"Response","unit":"points"}}}`. It reports one type, missing-cell count and example value per column, plus category count for categorical columns. Override types are `boolean`, `int64`, `uint64`, `float64`, `date`, `time`, `datetime`, `categorical`, `string`, or `null`. Null means an empty or whitespace-only cell; strings such as `NA` are ordinary text. Invalid overrides fail without changing the input. An optional `.json` output writes a no-overwrite schema report. This operation builds a temporary typed columnar view; the existing transformations still use text cells.
+- `export-typed-parquet`: Use the same optional schema JSON to validate or override types, then choose a new `.parquet` output. It writes Arrow booleans, signed/unsigned integers, finite floats, dates, nanosecond times and timestamps, UTF-8 strings and dictionary-encoded categorical columns. Empty/whitespace-only values become null. Labels and units are saved as Arrow field metadata. Offset-aware datetimes are normalized to UTC; mixed aware and naive values in one column are rejected. The report preview describes the schema written. The source file remains unchanged.
 - `filter`: Exact-match filter; CSV or string Parquet.
 - `filter-contains` and `filter-not-contains`: JSON parameters name a column and nonempty literal substring. Matching is case-sensitive and does not interpret the search text as a pattern.
 - `head-rows` and `tail-rows`: JSON parameter `{"rows":N}` keeps the first or last N rows, preserving source order. N is limited to 500,000.
@@ -43,7 +44,7 @@ Limitations: Schema inspection now provides inferred and explicitly overridden t
 
 No output overwrite is allowed. No accounts, ads, telemetry or runtime downloads are intended. Do not use this unverified snapshot with valuable or hostile input. Citation and donations are voluntary.
 
-Parquet import supports flat, uncompressed UTF-8 columns. Nulls become blank text. Numeric, nested, and compressed input returns an error. Preview, filter, numeric summary, scatter, and export all accept this input through the same table loader.
+Parquet import supports flat, uncompressed scalar columns, including booleans, numeric primitives, dates, times, timestamps and UTF-8 dictionary values. Nulls become blank text in the legacy transformation table. Nested and binary columns, compressed Parquet pages and files beyond the declared/decoded byte limits are rejected. `export-typed-parquet` writes the validated schema as native Arrow physical types; subsequent legacy transforms still operate on text values.
 
 For tab-separated text, use the .tsv extension on input or output. Quoted fields can contain tabs. The same size, header and formula-guard rules apply as for CSV. TSV passed the Linux round-trip fixture.
 
