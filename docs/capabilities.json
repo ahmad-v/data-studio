@@ -8,42 +8,54 @@
       "operation": "drop-missing",
       "description": "Drop rows missing a selected value",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux integration fixture passed"
     },
     {
       "operation": "fill-missing",
       "description": "Fill blanks in a selected column",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux integration fixture passed"
     },
     {
       "operation": "rename-column",
       "description": "Rename a table header",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux integration fixture passed"
     },
     {
       "operation": "select-columns",
       "description": "Select and reorder table columns",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux x86_64 fixtures passed"
     },
     {
       "operation": "counts",
       "description": "Exact value counts for a column",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux x86_64 fixtures passed"
     },
     {
       "operation": "preview",
       "description": "CSV, named or first XLSX sheet, or uncompressed UTF-8 Parquet text preview",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "not run"
     },
     {
@@ -57,70 +69,90 @@
       "operation": "sort",
       "description": "Stable ascending text sort by one column",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux x86_64 fixtures passed"
     },
     {
       "operation": "deduplicate",
       "description": "Keep the first occurrence of each exact row",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux x86_64 fixtures passed"
     },
     {
       "operation": "mask-column",
       "description": "Replace nonempty cells in a selected column",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux x86_64 source preservation and TSV export fixtures passed"
     },
     {
       "operation": "inner-join",
       "description": "Exact nonblank key inner join between two local tables",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux fixtures and mixed CSV/TSV Unicode CLI output verified"
     },
     {
       "operation": "left-join",
       "description": "Exact-text left outer join preserving unmatched left rows",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux duplicate, unmatched and blank-key fixtures passed"
     },
     {
       "operation": "right-join",
       "description": "Exact-text right outer join preserving unmatched right rows",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux duplicate, unmatched and blank-key fixtures passed"
     },
     {
       "operation": "full-join",
       "description": "Exact-text full outer join preserving unmatched rows from both inputs",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux duplicate, unmatched and blank-key fixtures passed"
     },
     {
       "operation": "run-project",
       "description": "Replay an ordered version 1 data project against a local table",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux x86_64 replay, CLI export and failed-step isolation passed"
     },
     {
       "operation": "select-sql",
       "description": "Bounded read-only SQLite SELECT over one local input",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "SQL result comparison and authorization fixtures passed"
     },
     {
       "operation": "group-summary",
       "description": "Grouped finite numeric descriptive statistics",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Grouped summary checked against independent Python statistics"
     },
     {
@@ -141,21 +173,27 @@
       "operation": "correlation",
       "description": "Pearson coefficient on complete numeric pairs",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux x86_64 fixtures passed"
     },
     {
       "operation": "linear-regression",
       "description": "Ordinary least squares with intercept and complete numeric pairs",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux x86_64 regression suite and independent arithmetic CLI fixture passed"
     },
     {
       "operation": "line-chart",
       "description": "Monochrome vector lines in table order",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux x86_64 vector fixture passed"
     },
     {
@@ -169,71 +207,181 @@
       "operation": "quantiles",
       "description": "R7 quartiles, median and interquartile range",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linear interpolation reference fixture passed"
     },
     {
       "operation": "standard-error",
       "description": "Sample standard deviation and standard error of the mean",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux operation report fixture passed"
     },
     {
       "operation": "mean-ci",
       "description": "Two-sided 95 percent Student-t confidence interval for a numeric mean",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Student-t critical values and interval matched reference values"
     },
     {
       "operation": "bootstrap-mean-ci",
       "description": "Deterministic 2,000-resample percentile bootstrap interval for a mean",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Repeated run determinism and bounded interval fixture passed"
     },
     {
       "operation": "bootstrap-median-ci",
       "description": "Deterministic 2,000-resample percentile bootstrap interval for a median",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Repeated run determinism and bounded interval fixture passed"
     },
     {
       "operation": "welch-t-test",
       "description": "Unequal-variance two-sample Student-t test and difference interval",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Two-sided p value, degrees of freedom and statistic matched reference fixture"
     },
     {
       "operation": "paired-t-test",
       "description": "Paired Student-t test on complete numeric differences",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Linux complete-pair and difference-vector fixture passed"
     },
     {
       "operation": "one-way-anova",
       "description": "Independent-groups one-way fixed-effects ANOVA",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "F statistic, degrees of freedom and p value matched reference fixture"
     },
     {
       "operation": "spearman",
       "description": "Spearman rank correlation with average ranks and approximate significance",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Tied-rank and significance approximation fixture passed"
     },
     {
       "operation": "correlation-interval",
       "description": "Two-sided 95 percent Fisher-z interval for Pearson correlation",
       "status": "implemented-unverified",
-      "targets": ["x86_64-unknown-linux-gnu"],
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
       "fixture_status": "Interval ordering, containment and boundary rejection fixtures passed"
+    },
+    {
+      "operation": "recode-values",
+      "description": "Exact column value mapping with unchanged fallback values",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Route and project fixtures verify mapped, unmapped and blank cells"
+    },
+    {
+      "operation": "convert-number",
+      "description": "Validate and normalize finite numeric text",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Route and project fixtures verify normalization and blanks"
+    },
+    {
+      "operation": "convert-integer",
+      "description": "Validate exact signed 64-bit integer text",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Route and project fixtures verify exactness and reject fractional values"
+    },
+    {
+      "operation": "convert-boolean",
+      "description": "Normalize true/false, yes/no and 1/0 to boolean text",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Route and project fixtures verify accepted forms and rejection"
+    },
+    {
+      "operation": "split-column",
+      "description": "Literal exact-arity split into named columns",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Route and project fixtures verify shapes and malformed row rejection"
+    },
+    {
+      "operation": "merge-columns",
+      "description": "Append a new literal-delimited column while retaining source columns",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Route and project fixtures verify values and source preservation"
+    },
+    {
+      "operation": "pivot",
+      "description": "Long-to-wide exact identifier/category pivot",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Route and project fixtures verify sorting and duplicate-pair rejection"
+    },
+    {
+      "operation": "unpivot",
+      "description": "Wide-to-long reshape over selected id and value columns",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Route and project fixtures verify stable row/value order"
+    },
+    {
+      "operation": "group-sum",
+      "description": "Grouped sum over finite numeric values",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Route and project fixtures verify blank handling and exact groups"
+    },
+    {
+      "operation": "group-mean",
+      "description": "Grouped arithmetic mean over finite numeric values",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Route and project fixtures verify blank handling and exact groups"
     }
   ]
 }

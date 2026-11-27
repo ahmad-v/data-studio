@@ -32,6 +32,16 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | one-way-anova | Independent-groups one-way ANOVA | Linux reference fixture-tested |
 | spearman | Rank correlation with average ties and approximate p value | Linux tied-rank fixture-tested |
 | correlation-interval | Pearson Fisher-z interval | Linux bounded-interval fixture-tested |
+| recode-values | Exact cell mapping with unchanged fallback values | Linux route and project fixtures |
+| convert-number | Validate and normalize finite numeric text | Linux route and project fixtures |
+| convert-integer | Validate exact signed 64-bit integer text | Linux route and project fixtures |
+| convert-boolean | Normalize accepted boolean spellings to true/false | Linux route and project fixtures |
+| split-column | Literal exact-arity split into named columns | Linux route and project fixtures |
+| merge-columns | Append a delimited column while retaining source columns | Linux route and project fixtures |
+| pivot | Long-to-wide reshape with duplicate-pair rejection | Linux route and project fixtures |
+| unpivot | Wide-to-long reshape with selected id/value columns | Linux route and project fixtures |
+| group-sum | Grouped finite numeric sum | Linux route and project fixtures |
+| group-mean | Grouped finite numeric mean | Linux route and project fixtures |
 | export | CSV formula guard; Parquet UTF-8 columns | Linux fixture-tested |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
 | correlation | Pearson coefficient on complete numeric pairs | Linux fixture-tested |
@@ -40,6 +50,6 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 
 ## Known gaps
 
-In-memory text table only; no inferred types, large-data virtualization, formulas, advanced statistics, project editing, undo, batch runs, other formats, authoritative palettes or full scientific export. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.
+In-memory text table only; no inferred or preserved typed schema, large-data virtualization, formulas, regex transforms, multi-key/duplicate-aggregating pivot, project editor, undo, batch runs, other formats, authoritative palettes or full scientific export. Explicit number/integer/boolean operations validate and normalize cell text without changing the table's string schema. XLSX ZIP expansion and range allocation occur in dependency before cell limit; hostile workbooks not safe for production. CSV guard alters potentially formula-like cells, including negative numbers; not a proof of spreadsheet safety. No exact type preservation.
 
 Hosted matrix, device, and packaging verification remain open. See [verification evidence](VERIFICATION.md) and [dependency review](DEPENDENCIES.md).

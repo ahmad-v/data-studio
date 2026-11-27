@@ -78,3 +78,17 @@ All numeric routes reject nonfinite or malformed observed values, state their me
 - `rename-column`. Enter `old=new`. The new name must contain text and be unique.
 
 All three operations can be used in a project. Use a `column` field and, where applicable, `value` for fill or `name` for rename.
+
+## Recode, convert and reshape
+
+The ten bounded transforms below are available as individual operations and as ordered version 1 project steps. Enter each parameter as JSON (without an `operation` field); examples use these exact field names:
+
+- `recode-values`: `{"column":"status","mapping":{"old":"new"}}`. Mapping is exact and case-sensitive; unmapped cells stay unchanged.
+- `convert-number`: `{"column":"amount"}` validates finite numeric values and writes normalized numeric text. `convert-integer` requires exact signed 64-bit integers. `convert-boolean` accepts `true`/`false`, `yes`/`no` or `1`/`0` (case-insensitive) and writes `true` or `false`. All three preserve blank cells and reject malformed nonblank cells.
+- `split-column`: `{"column":"name","delimiter":" ","new_columns":["first","last"]}` replaces the source column with the declared outputs. The delimiter is literal and each nonblank row must produce exactly the requested number of parts.
+- `merge-columns`: `{"columns":["first","last"],"name":"full","delimiter":" "}` appends a new column; source columns remain.
+- `pivot`: `{"id_column":"id","pivot_column":"year","value_column":"value"}` creates sorted category columns. Blank pivot categories and duplicate identifier/category pairs are rejected; aggregate duplicates first.
+- `unpivot`: `{"id_columns":["id"],"value_columns":["2024","2025"],"variable_name":"year","value_name":"value"}` emits one output row per source row and selected value column, including blank values.
+- `group-sum` and `group-mean`: `{"group_column":"site","value_column":"score"}` produce exact text groups in sorted order. Blank numeric values are omitted, blank group labels remain groups, and malformed nonblank numbers fail the operation.
+
+These operations keep the table text-based and enforce a 128 KiB parameter limit, the existing row and column limits, and a 32 MiB transformed-text limit. A failed transform produces no partial output file. Conversion validates and normalizes cell text; it does not create typed columns. Split and merge are literal operations, not regular-expression tools. Project steps are bounded to 32 and failed steps are reported by position.
