@@ -16,7 +16,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | sort | Stable type-aware ascending sort, nulls last, for CSV/TSV and supported flat Parquet; typed preview and supported output | Regression route added; new hosted verification pending |
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
 | mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
-| inner-join | Exact nonblank key inner join with bounded result | Linux fixture and CLI-tested |
+| inner-join | Bounded exact-text fallback plus typed key matching for CSV/TSV and supported scalar Parquet input, with typed Parquet output | Regression route added; new hosted verification pending |
 | left-join | Left outer join with duplicate-key expansion and blank-key nonmatching | Linux fixture-tested |
 | right-join | Right outer join preserving right input order and every unmatched row | Linux fixture-tested |
 | full-join | Full outer join preserving unmatched rows from both tables | Linux fixture-tested |

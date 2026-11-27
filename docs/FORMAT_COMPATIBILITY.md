@@ -14,7 +14,7 @@ No capability is marked device-verified or released. The merged typed-processing
 | sort | Stable typed ascending order with nulls last for supported CSV/TSV and scalar Parquet inputs | New regression route; hosted verification pending |
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
 | mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
-| inner-join | Exact nonblank key inner join with bounded result | Linux fixture and CLI-tested |
+| inner-join | Typed join for CSV/TSV and supported scalar Parquet; text fallback for other supported inputs | Typed regression route added; hosted verification pending |
 | left-join | Exact text key left outer join; duplicate matches expand; blank keys do not match | Linux fixture-tested |
 | right-join | Exact text key right outer join; right row order and unmatched blank-key rows retained | Linux fixture-tested |
 | full-join | Exact text full outer join; unmatched rows from both sides retained | Linux fixture-tested |

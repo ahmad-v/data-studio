@@ -24,7 +24,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. CSV, TSV and supported scalar Parquet inputs use stable typed order for previews and supported outputs; nulls sort last. CSV/TSV output serializes nulls as empty fields."},
  Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
  Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
- Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Exact nonblank text keys. Optional new CSV, TSV or Parquet output."#},
+ Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Supported CSV, TSV and scalar Parquet inputs use type-matched keys (nulls never match); other formats retain exact nonblank text matching. Optional new CSV, TSV or Parquet output."#},
  Operation{id:"left-join",label:"Left join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched left rows; nonmatching right columns are blank. Exact nonblank text keys."#},
  Operation{id:"right-join",label:"Right join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched right rows; nonmatching left columns are blank. Exact nonblank text keys."#},
  Operation{id:"full-join",label:"Full outer join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched rows from both tables; missing-side columns are blank."#},
@@ -1039,7 +1039,7 @@ fn try_typed_basic_operation(
 ) -> Result<Option<Outcome>> {
     if !matches!(
         operation,
-        "filter" | "sort" | "select-columns" | "rename-column"
+        "filter" | "sort" | "select-columns" | "rename-column" | "inner-join"
     ) {
         return Ok(None);
     }
@@ -1059,17 +1059,43 @@ fn try_typed_basic_operation(
     {
         return Ok(None);
     }
-    let Some(step) = request_step(operation, parameter)? else {
-        return Ok(None);
+    let join_request = if operation == "inner-join" {
+        if parameter.len() > 32 * 1024 {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Join settings exceed the byte limit",
+            ));
+        }
+        Some(serde_json::from_str::<join::JoinRequest>(parameter)?)
+    } else {
+        None
+    };
+    let step = if join_request.is_none() {
+        let Some(step) = request_step(operation, parameter)? else {
+            return Ok(None);
+        };
+        Some(step)
+    } else {
+        None
     };
     let mut table =
         typed::TypedTable::from_path(input, None, typed::SchemaRequest::default(), job)?;
-    match step {
-        Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
-        Step::Sort { column } => table.sort_by(&column, job)?,
-        Step::SelectColumns { columns } => table.select_columns(&columns, job)?,
-        Step::RenameColumn { column, name } => table.rename_column(&column, name)?,
-        _ => return Ok(None),
+    if let Some(options) = join_request {
+        let right = typed::TypedTable::from_path(
+            &options.right_path,
+            None,
+            typed::SchemaRequest::default(),
+            job,
+        )?;
+        table = table.inner_join(right, &options.left_key, &options.right_key, job)?;
+    } else {
+        match step.expect("non-join operations have a parsed typed step") {
+            Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
+            Step::Sort { column } => table.sort_by(&column, job)?,
+            Step::SelectColumns { columns } => table.select_columns(&columns, job)?,
+            Step::RenameColumn { column, name } => table.rename_column(&column, name)?,
+            _ => return Ok(None),
+        }
     }
     let mut written = None;
     if let Some(kind) = output_kind.as_deref() {
@@ -1384,6 +1410,60 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standalone_inner_join_uses_typed_keys_and_writes_typed_parquet() {
+        let directory = tempfile::tempdir().unwrap();
+        let left = directory.path().join("left.csv");
+        let right = directory.path().join("right.csv");
+        let output = directory.path().join("joined.parquet");
+        std::fs::write(&left, "id,amount\n02,10\n1,20\n,30\n").unwrap();
+        std::fs::write(&right, "key,label\n2,A\n1,B\n,missing\n").unwrap();
+        let parameter = serde_json::json!({
+            "right_path": right,
+            "left_key": "id",
+            "right_key": "key"
+        })
+        .to_string();
+        let result = handle(
+            Request {
+                operation: "inner-join".into(),
+                input: left.clone(),
+                output: output.clone(),
+                parameter,
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert!(result.preview.contains("\"rows\": 2"));
+        assert_eq!(
+            std::fs::read_to_string(&left).unwrap(),
+            "id,amount\n02,10\n1,20\n,30\n"
+        );
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(
+            localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(reader.schema().field(0).data_type(), &DataType::Int64);
+        assert_eq!(reader.schema().field(2).name(), "right.label");
+        let batch = reader.build().unwrap().next().unwrap().unwrap();
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[2, 1]);
+        let labels = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(labels.value(0), "A");
+        assert_eq!(labels.value(1), "B");
+    }
+
     #[test]
     fn filter_and_summary() {
         let d = tempfile::tempdir().unwrap();
