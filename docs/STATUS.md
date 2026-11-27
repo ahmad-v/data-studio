@@ -6,14 +6,14 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 |---|---|---|
 | drop-missing | Drop rows missing a selected value | Linux fixture-tested |
 | fill-missing | Fill blanks in a selected column | Linux fixture-tested |
-| rename-column | Rename a table header | Linux fixture-tested |
-| select-columns | Select and reorder table columns | Linux fixture-tested |
+| rename-column | Typed CSV/TSV and supported flat Parquet rename; typed preview, CSV/TSV and Parquet output | Regression route added; new hosted verification pending |
+| select-columns | Typed CSV/TSV and supported flat Parquet selection; typed preview, CSV/TSV and Parquet output | Regression route added; new hosted verification pending |
 | counts | Exact value counts for a column | Linux fixture-tested |
 | preview | CSV, TSV, named or first XLSX sheet, or supported flat scalar Parquet cast to text | Linux fixture-tested |
 | inspect-schema | Infer or explicitly validate a columnar schema; report types, nulls, categorical dictionary counts, labels and units without modifying input; CSV/TSV parses directly to typed columns | Linux unit and route fixtures passed; five-target hosted verification pending |
 | export-typed-parquet | Write a validated or inferred typed Arrow schema, including nulls, temporal types, category dictionaries and label/unit metadata | Linux round-trip/rejection fixtures passed; hosted native matrix pending |
-| filter | Exact-match filter; CSV or string Parquet | Linux fixture-tested |
-| sort | Stable ascending text sort by one column | Linux fixture-tested |
+| filter | Type-aware equality for CSV/TSV and supported flat Parquet; typed preview and supported CSV/TSV/Parquet output | Regression route added; new hosted verification pending |
+| sort | Stable type-aware ascending sort, nulls last, for CSV/TSV and supported flat Parquet; typed preview and supported output | Regression route added; new hosted verification pending |
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
 | mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
 | inner-join | Exact nonblank key inner join with bounded result | Linux fixture and CLI-tested |

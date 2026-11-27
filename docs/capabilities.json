@@ -24,21 +24,21 @@
     },
     {
       "operation": "rename-column",
-      "description": "Rename a table header; typed preview/Parquet route for supported CSV, TSV and flat Parquet input",
+      "description": "Rename a table header with typed processing and preview/CSV/TSV/Parquet output for supported CSV, TSV and flat Parquet input",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux text route fixture passed; typed Parquet schema-preservation coverage added"
+      "fixture_status": "Typed delimited output regression added; hosted verification pending"
     },
     {
       "operation": "select-columns",
-      "description": "Select and reorder columns; typed preview/Parquet route for supported CSV, TSV and flat Parquet input",
+      "description": "Select and reorder columns with typed processing and preview/CSV/TSV/Parquet output for supported CSV, TSV and flat Parquet input",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux x86_64 legacy fixtures passed; typed preview/Parquet selection route covered"
+      "fixture_status": "Typed delimited output regression added; hosted verification pending"
     },
     {
       "operation": "counts",
@@ -78,19 +78,19 @@
     },
     {
       "operation": "filter",
-      "description": "Exact text filter for text output, with typed equality preview/Parquet route for supported CSV, TSV and flat Parquet input",
+      "description": "Typed equality filter for supported CSV, TSV and flat Parquet input, with typed preview and supported delimited/Parquet output",
       "status": "implemented-unverified",
       "targets": [],
-      "fixture_status": "Legacy exact-text output and typed preview/Parquet equality route fixtures added; hosted verification pending"
+      "fixture_status": "Typed delimited output regression added; hosted verification pending"
     },
     {
       "operation": "sort",
-      "description": "Stable text sort for text output, with typed ascending preview/Parquet route for supported CSV, TSV and flat Parquet input",
+      "description": "Stable typed ascending sort with nulls last for supported CSV, TSV and flat Parquet input, with preview and supported output",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux x86_64 text fixtures passed; typed numeric sort and null-last Parquet route covered"
+      "fixture_status": "Typed delimited output regression added; hosted verification pending"
     },
     {
       "operation": "deduplicate",
