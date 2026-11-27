@@ -8,8 +8,9 @@ This independent studio uses Localwright at source level. There is no separate m
 
 - CSV / first XLSX sheet text preview (implemented-unverified).
 - `inspect-schema` builds a typed columnar schema view with inference, explicit overrides, null counts, categorical dictionary counts, labels and units; it leaves source cells unchanged.
+- `inspect-table` loads a bounded typed preview (up to 10,000 cells; text capped at 256 characters) into the native paginated Data table workspace with row indices, typed sorting, null-aware cells, and a schema inspector. Sorting applies to the loaded preview only; it does not write or modify files.
 - `export-typed-parquet` validates that schema and writes typed Arrow/Parquet scalar columns, nulls, categories, and label/unit metadata; Parquet imports accept supported flat scalar types.
-- Filter, sort, select-columns and rename-column use typed CSV/TSV/Parquet values for previews and CSV/TSV/Parquet outputs. Delimited exports preserve original cell spellings where possible (including leading zeroes). True nulls and empty strings both serialize as empty fields; typed Parquet preserves nulls separately.
+- Filter, sort, select-columns and rename-column use typed CSV/TSV/XLSX/Parquet values for previews and CSV/TSV/Parquet outputs. Delimited exports preserve original cell spellings where possible (including leading zeroes). True nulls and empty strings both serialize as empty fields; typed Parquet preserves nulls separately.
 - Exact-match filter over delimited text or supported scalar Parquet converted to text (implemented-unverified).
 - Numeric column n, missing, mean, sample SD, min/max (implemented-unverified).
 - CSV formula guard; Parquet UTF-8 columns (implemented-unverified).
