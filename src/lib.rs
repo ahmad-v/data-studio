@@ -1748,7 +1748,10 @@ mod tests {
         let schema = reader.schema();
         assert_eq!(schema.field(0).data_type(), &DataType::Int64);
         assert_eq!(schema.field(1).data_type(), &DataType::Float64);
-        assert_eq!(schema.field(1).metadata()["localwright.label"], "Total response");
+        assert_eq!(
+            schema.field(1).metadata()["localwright.label"],
+            "Total response"
+        );
         assert_eq!(schema.field(1).metadata()["localwright.unit"], "points");
         let mut batches = reader.build().unwrap();
         let batch = batches.next().unwrap().unwrap();

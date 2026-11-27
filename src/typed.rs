@@ -83,18 +83,49 @@ pub(crate) enum TypedComparison {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum NumericExpr {
-    Literal { value: f64 },
-    Column { name: String },
-    Add { left: Box<Self>, right: Box<Self> },
-    Subtract { left: Box<Self>, right: Box<Self> },
-    Multiply { left: Box<Self>, right: Box<Self> },
-    Divide { left: Box<Self>, right: Box<Self> },
-    Negate { value: Box<Self> },
-    Absolute { value: Box<Self> },
-    SquareRoot { value: Box<Self> },
-    Log10 { value: Box<Self> },
-    Round { value: Box<Self>, decimal_places: i32 },
-    Clip { value: Box<Self>, minimum: f64, maximum: f64 },
+    Literal {
+        value: f64,
+    },
+    Column {
+        name: String,
+    },
+    Add {
+        left: Box<Self>,
+        right: Box<Self>,
+    },
+    Subtract {
+        left: Box<Self>,
+        right: Box<Self>,
+    },
+    Multiply {
+        left: Box<Self>,
+        right: Box<Self>,
+    },
+    Divide {
+        left: Box<Self>,
+        right: Box<Self>,
+    },
+    Negate {
+        value: Box<Self>,
+    },
+    Absolute {
+        value: Box<Self>,
+    },
+    SquareRoot {
+        value: Box<Self>,
+    },
+    Log10 {
+        value: Box<Self>,
+    },
+    Round {
+        value: Box<Self>,
+        decimal_places: i32,
+    },
+    Clip {
+        value: Box<Self>,
+        minimum: f64,
+        maximum: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -443,13 +474,13 @@ fn evaluate_numeric_binary(
     operation: impl Fn(f64, f64) -> f64,
 ) -> Result<Option<f64>> {
     let left = evaluate_numeric_expression(left, table, row)?;
+    let Some(left) = left else {
+        return Ok(None);
+    };
     let right = evaluate_numeric_expression(right, table, row)?;
-    match (left, right) {
-        (Some(left), Some(right)) => {
-            finite_numeric_result(operation(left, right)).map(Some)
-        }
-        _ => Ok(None),
-    }
+    right
+        .map(|right| finite_numeric_result(operation(left, right)))
+        .transpose()
 }
 
 fn evaluate_numeric_expression(
@@ -474,13 +505,16 @@ fn evaluate_numeric_expression(
         }
         NumericExpr::Divide { left, right } => {
             let left = evaluate_numeric_expression(left, table, row)?;
+            let Some(left) = left else {
+                return Ok(None);
+            };
             let right = evaluate_numeric_expression(right, table, row)?;
-            match (left, right) {
-                (Some(_), Some(right)) if right == 0.0 => {
+            match right {
+                Some(right) if right == 0.0 => {
                     Err(Error::input("Numeric expression division by zero"))
                 }
-                (Some(left), Some(right)) => finite_numeric_result(left / right).map(Some),
-                _ => Ok(None),
+                Some(right) => finite_numeric_result(left / right).map(Some),
+                None => Ok(None),
             }
         }
         NumericExpr::Negate { value } => {
@@ -491,14 +525,18 @@ fn evaluate_numeric_expression(
         }
         NumericExpr::SquareRoot { value } => evaluate_numeric_unary(value, table, row, |value| {
             if value < 0.0 {
-                Err(Error::input("Numeric expression square root requires a nonnegative value"))
+                Err(Error::input(
+                    "Numeric expression square root requires a nonnegative value",
+                ))
             } else {
                 Ok(value.sqrt())
             }
         }),
         NumericExpr::Log10 { value } => evaluate_numeric_unary(value, table, row, |value| {
             if value <= 0.0 {
-                Err(Error::input("Numeric expression log10 requires a positive value"))
+                Err(Error::input(
+                    "Numeric expression log10 requires a positive value",
+                ))
             } else {
                 Ok(value.log10())
             }
@@ -651,7 +689,10 @@ impl TypedTable {
             ));
         }
         if self.columns.len() >= MAX_COLS
-            || self.rows.saturating_mul(self.columns.len().saturating_add(1)) > MAX_CELLS
+            || self
+                .rows
+                .saturating_mul(self.columns.len().saturating_add(1))
+                > MAX_CELLS
         {
             return Err(Error::new(
                 ErrorKind::Limit,
@@ -667,7 +708,11 @@ impl TypedTable {
             let value = evaluate_numeric_expression(expression, self, row).map_err(|error| {
                 Error::new(
                     error.kind,
-                    format!("Numeric expression failed on row {}: {}", row + 1, error.message),
+                    format!(
+                        "Numeric expression failed on row {}: {}",
+                        row + 1,
+                        error.message
+                    ),
                 )
             })?;
             values.push(value.map_or(Scalar::Null, Scalar::Float64));
@@ -1621,10 +1666,8 @@ mod tests {
     fn numeric_expressions_reject_inexact_integer_conversion() {
         let source = table(vec!["large"], vec![vec!["9007199254740993"]]);
         let mut typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
-        let expression: NumericExpr = serde_json::from_str(
-            r#"{"op":"column","name":"large"}"#,
-        )
-        .unwrap();
+        let expression: NumericExpr =
+            serde_json::from_str(r#"{"op":"column","name":"large"}"#).unwrap();
         let error = typed
             .derive_numeric_column(
                 "converted".into(),
