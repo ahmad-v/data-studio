@@ -1480,11 +1480,7 @@ impl TypedTable {
 
     /// Keep the first occurrence of each typed key. Nulls compare equal for
     /// deduplication; categorical values compare by label, not dictionary id.
-    pub(crate) fn deduplicate_rows(
-        &mut self,
-        names: Option<&[String]>,
-        job: &Job,
-    ) -> Result<()> {
+    pub(crate) fn deduplicate_rows(&mut self, names: Option<&[String]>, job: &Job) -> Result<()> {
         let selected = match names {
             Some(names) if names.is_empty() => {
                 return Err(Error::input("Select at least one duplicate key column"));
@@ -2517,10 +2513,7 @@ mod tests {
         assert_eq!(typed.rows, 2);
         assert_eq!(typed.columns[0].values, [Scalar::Int64(10), Scalar::Null]);
         assert_eq!(typed.columns[1].values[0], Scalar::String("first".into()));
-        assert_eq!(
-            typed.columns[1].values[1],
-            Scalar::String("missing".into())
-        );
+        assert_eq!(typed.columns[1].values[1], Scalar::String("missing".into()));
     }
 
     #[test]
