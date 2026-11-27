@@ -13,6 +13,9 @@ Nothing is verified on a native target. The machine-readable registry is a devel
 | deduplicate | Keep the first occurrence of each exact row | Linux fixture-tested |
 | mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
 | inner-join | Exact nonblank key inner join with bounded result | Linux fixture and CLI-tested |
+| left-join | Exact text key left outer join; duplicate matches expand; blank keys do not match | Linux fixture-tested |
+| right-join | Exact text key right outer join; unmatched rows including blank-key rows retained | Linux fixture-tested |
+| full-join | Exact text full outer join; unmatched rows from both sides retained | Linux fixture-tested |
 | run-project | Replay declared table transformations from a versioned project | Linux fixture and CLI-tested |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
