@@ -19,9 +19,9 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or supported flat scalar Parquet columns as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"inspect-schema",label:"Inspect typed schema",hint:r#"Optional JSON: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates per-column types and missing values without changing source data. Optional new .json report."#},
  Operation{id:"export-typed-parquet",label:"Export typed Parquet",hint:r#"Required JSON schema options: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates primitive types, nulls and categoricals, then writes a new typed .parquet file."#},
- Operation{id:"filter",label:"Filter",hint:"Enter column=value. CSV, TSV and supported scalar Parquet inputs use inferred typed equality for previews and supported outputs; numeric 010 matches numeric 10. CSV/TSV output serializes nulls as empty fields."},
- Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. CSV, TSV and supported scalar Parquet inputs use typed columns for previews and supported outputs. CSV/TSV output serializes nulls as empty fields."},
- Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. CSV, TSV and supported scalar Parquet inputs use stable typed order for previews and supported outputs; nulls sort last. CSV/TSV output serializes nulls as empty fields."},
+ Operation{id:"filter",label:"Filter",hint:"Enter column=value. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs use inferred typed equality for previews and supported outputs; numeric 010 matches numeric 10. CSV/TSV output serializes nulls as empty fields."},
+ Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs use typed columns for previews and supported outputs. CSV/TSV output serializes nulls as empty fields."},
+ Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs use stable typed order for previews and supported outputs; nulls sort last. CSV/TSV output serializes nulls as empty fields."},
  Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
  Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
  Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Supported CSV, TSV and scalar Parquet inputs use type-matched keys (nulls never match); other formats retain exact nonblank text matching. Optional new CSV, TSV or Parquet output."#},
@@ -30,7 +30,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"full-join",label:"Full outer join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched rows from both tables; missing-side columns are blank."#},
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
- Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. CSV, TSV and supported scalar Parquet inputs preserve inferred types in previews and Parquet output; CSV/TSV output serializes nulls as empty fields."},
+ Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs preserve inferred types in previews and Parquet output; CSV/TSV output serializes nulls as empty fields."},
  Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Add optional `typed_schema` (for example {"overrides":{"score":"float64"}}) to run a typed Parquet pipeline. Typed projects support schema-aware comparisons, stable sorts, bounded numeric expressions, column renaming, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving `fill-missing`/`fill-forward`/`fill-backward`; save results to a new .parquet file. Join paths are relative to the project file unless absolute. Projects without typed_schema keep their existing text behavior."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
@@ -1072,7 +1072,10 @@ fn try_typed_basic_operation(
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase);
-    if !matches!(input_kind.as_deref(), Some("csv" | "tsv" | "parquet")) {
+    if !matches!(
+        input_kind.as_deref(),
+        Some("csv" | "tsv" | "xlsx" | "parquet")
+    ) {
         return Ok(None);
     }
     let output_kind = output
@@ -1189,7 +1192,7 @@ fn try_typed_basic_operation(
     Ok(Some(Outcome {
         preview: preview.chars().take(24000).collect(),
         written,
-        warnings: vec!["Applied the operation to typed columns. CSV/TSV cells are decoded directly into typed values; blank and whitespace-only values are null. Delimited output preserves original cell spellings where possible, including leading zeroes and whitespace-only tokens on retained rows. True nulls serialize as empty fields; reimport cannot distinguish an empty string from null. Parquet retains that distinction. Source inputs remain unchanged. Parquet input uses the supported-scalar decoder before type inference, so original dictionary and field metadata are not restored.".into()],
+        warnings: vec!["Applied the operation to typed columns. CSV/TSV cells are decoded directly; XLSX uses native worksheet cell types from the first sheet, preserving explicit empty text separately from blank cells. Whitespace-only values are null. Delimited output preserves original cell spellings where possible, including leading zeroes and whitespace-only tokens on retained rows. True nulls serialize as empty fields; reimport cannot distinguish an empty string from null. Parquet retains that distinction. Source inputs remain unchanged. Parquet input uses the supported-scalar decoder before type inference, so original dictionary and field metadata are not restored.".into()],
         ..Outcome::default()
     }))
 }
@@ -2465,6 +2468,156 @@ mod tests {
             std::fs::read_to_string(delimited_output).unwrap(),
             "id,score,label\n2,10,a\n1,10,c\n"
         );
+    }
+
+    #[test]
+    fn xlsx_basic_operations_use_typed_values_and_preserve_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("source.xlsx");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/table.xlsx");
+        std::fs::copy(&fixture, &input).unwrap();
+        let original = std::fs::read(&input).unwrap();
+
+        let run = |operation: &str, parameter: &str, output: &Path| {
+            handle(
+                Request {
+                    operation: operation.into(),
+                    input: input.clone(),
+                    output: output.to_path_buf(),
+                    parameter: parameter.into(),
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+            .unwrap()
+        };
+
+        let filtered = dir.path().join("filtered.parquet");
+        let outcome = run("filter", "x=1", &filtered);
+        assert!(outcome.preview.contains("\"rows\": 1"));
+        let bytes = localwright_core::read_bounded(&filtered, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(1).data_type(), &DataType::Float64);
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let x = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::Float64Array>()
+            .unwrap();
+        assert_eq!(x.values(), &[1.0]);
+
+        let filtered_csv = dir.path().join("filtered.csv");
+        run("filter", "x=1", &filtered_csv);
+        assert_eq!(
+            std::fs::read_to_string(filtered_csv).unwrap(),
+            "group,x,y\na,1,2\n"
+        );
+
+        let sorted = dir.path().join("sorted.parquet");
+        run("sort", "x", &sorted);
+        let bytes = localwright_core::read_bounded(&sorted, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let x = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::Float64Array>()
+            .unwrap();
+        assert_eq!(x.values(), &[1.0, 2.0]);
+
+        let selected = dir.path().join("selected.parquet");
+        run("select-columns", "x,group", &selected);
+        let bytes = localwright_core::read_bounded(&selected, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(0).name(), "x");
+        assert_eq!(reader.schema().field(0).data_type(), &DataType::Float64);
+        assert_eq!(reader.schema().field(1).name(), "group");
+
+        let renamed = dir.path().join("renamed.parquet");
+        run("rename-column", "x=measure", &renamed);
+        let bytes = localwright_core::read_bounded(&renamed, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(reader.schema().field(1).name(), "measure");
+        assert_eq!(reader.schema().field(1).data_type(), &DataType::Float64);
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+    }
+
+    #[test]
+    fn xlsx_basic_filter_distinguishes_empty_text_from_blank_null() {
+        use std::io::{Read, Write};
+        use zip::{write::SimpleFileOptions, ZipArchive, ZipWriter};
+
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("empty-vs-blank.xlsx");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/table.xlsx");
+        let source = std::fs::read(fixture).unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(source)).unwrap();
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().unwrap().into_owned();
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content).unwrap();
+            if name == "xl/worksheets/sheet1.xml" {
+                let xml = String::from_utf8(content).unwrap();
+                let xml = xml.replace("A1:C3", "A1:D3");
+                let xml = xml.replace(
+                    "</row><row r=\"2\">",
+                    "<c r=\"D1\" t=\"inlineStr\"><is><t>note</t></is></c></row><row r=\"2\">",
+                );
+                let xml = xml.replace(
+                    "</row><row r=\"3\">",
+                    "<c r=\"D2\" t=\"inlineStr\"><is><t></t></is></c></row><row r=\"3\">",
+                );
+                content = xml.into_bytes();
+            }
+            writer
+                .start_file(name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(&content).unwrap();
+        }
+        std::fs::write(&input, writer.finish().unwrap().into_inner()).unwrap();
+        let original = std::fs::read(&input).unwrap();
+
+        let table = typed::TypedTable::from_path(
+            &input,
+            None,
+            typed::SchemaRequest::default(),
+            &Job::new(),
+        )
+        .unwrap();
+        assert_eq!(table.schema_report()["columns"][3]["type"], "string");
+        assert_eq!(table.schema_report()["columns"][3]["missing"], 1);
+        assert_eq!(table.preview_report()["preview"][0][3], "");
+        assert_eq!(table.preview_report()["preview"][1][3], "");
+
+        let output = dir.path().join("only-blank.parquet");
+        let result = handle(
+            Request {
+                operation: "filter".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: "note=".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert!(result.preview.contains("\"rows\": 1"));
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let note = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(batch.num_rows(), 1);
+        assert!(note.is_null(0));
+        assert_eq!(std::fs::read(&input).unwrap(), original);
     }
 
     #[test]
