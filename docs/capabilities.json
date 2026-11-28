@@ -166,12 +166,12 @@
     },
     {
       "operation": "group-summary",
-      "description": "Grouped finite numeric descriptive statistics",
+      "description": "Typed grouped descriptive statistics for CSV, TSV, first-sheet XLSX and supported scalar Parquet; Parquet output preserves integer counts and floating-point statistics",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Grouped summary checked against independent Python statistics"
+      "fixture_status": "Existing summary compatibility fixture and typed Parquet schema/source-preservation fixture passed locally; hosted checks pending"
     },
     {
       "operation": "summary",
