@@ -2877,7 +2877,7 @@ mod tests {
             Job::new(),
         )
         .unwrap_err();
-        assert!(error.message.contains("Project step 1"));
+        assert!(error.message.contains("Typed project step 1"));
         assert!(!invalid_output.exists());
     }
 
