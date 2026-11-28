@@ -1832,33 +1832,11 @@ impl TypedTable {
     /// semantics. Integer-to-float conversion is limited to the exact f64 range
     /// so statistics never silently merge distinct large integer values.
     pub(crate) fn numeric_values(&self, name: &str, job: &Job) -> Result<Vec<f64>> {
-        const MAX_EXACT_INTEGER: u64 = 9_007_199_254_740_992;
-        let index = self.column_index(name)?;
-        let column = &self.columns[index];
-        let mut values = Vec::with_capacity(self.rows);
-        for value in &column.values {
-            job.check()?;
-            let number = match value {
-                Scalar::Null => continue,
-                Scalar::Int64(value) if value.unsigned_abs() <= MAX_EXACT_INTEGER => *value as f64,
-                Scalar::UInt64(value) if *value <= MAX_EXACT_INTEGER => *value as f64,
-                Scalar::Float64(value) if value.is_finite() => *value,
-                Scalar::Int64(_) | Scalar::UInt64(_) => {
-                    return Err(Error::input(format!(
-                        "Column {:?} contains integers outside the exact f64 range",
-                        column.name
-                    )))
-                }
-                _ => {
-                    return Err(Error::input(format!(
-                        "Column {:?} must have a numeric type",
-                        column.name
-                    )))
-                }
-            };
-            values.push(number);
-        }
-        Ok(values)
+        Ok(self
+            .numeric_values_with_nulls(name, job)?
+            .into_iter()
+            .flatten()
+            .collect())
     }
 
     pub(crate) fn drop_rows_any_missing(&mut self, job: &Job) -> Result<()> {
@@ -2143,6 +2121,91 @@ impl TypedTable {
             "preview": preview,
             "schema": self.schema_report(),
         })
+    }
+
+    /// Return a numeric column as one optional value per row. The declared
+    /// physical type is checked before reading values, nulls remain absent,
+    /// and integers outside float64's exact range are rejected.
+    pub(crate) fn numeric_values_with_nulls(
+        &self,
+        name: &str,
+        job: &Job,
+    ) -> Result<Vec<Option<f64>>> {
+        let index = self.column_index(name)?;
+        let column = &self.columns[index];
+        if !matches!(
+            column.kind,
+            ColumnType::Int64 | ColumnType::UInt64 | ColumnType::Float64
+        ) {
+            return Err(Error::input(format!(
+                "Statistical input column {name:?} must have a numeric type"
+            )));
+        }
+        column
+            .values
+            .iter()
+            .map(|value| {
+                job.check()?;
+                scalar_to_f64(column, value)
+            })
+            .collect()
+    }
+
+    /// Return row-wise complete numeric pairs while preserving source row
+    /// alignment until null exclusion has been applied.
+    pub(crate) fn numeric_pairs(
+        &self,
+        left_name: &str,
+        right_name: &str,
+        job: &Job,
+    ) -> Result<(Vec<f64>, Vec<f64>)> {
+        let left = self.numeric_values_with_nulls(left_name, job)?;
+        let right = self.numeric_values_with_nulls(right_name, job)?;
+        let mut left_values = Vec::with_capacity(left.len().min(right.len()));
+        let mut right_values = Vec::with_capacity(left.len().min(right.len()));
+        for (left, right) in left.into_iter().zip(right) {
+            job.check()?;
+            if let (Some(left), Some(right)) = (left, right) {
+                left_values.push(left);
+                right_values.push(right);
+            }
+        }
+        Ok((left_values, right_values))
+    }
+
+    /// Group finite numeric values by typed keys. Empty text group labels and
+    /// null labels are excluded to match the existing statistical contract.
+    pub(crate) fn grouped_numeric_values(
+        &self,
+        group_name: &str,
+        value_name: &str,
+        job: &Job,
+    ) -> Result<Vec<crate::statistics::GroupSample>> {
+        let group_index = self.column_index(group_name)?;
+        let group_column = &self.columns[group_index];
+        let values = self.numeric_values_with_nulls(value_name, job)?;
+        let mut groups = BTreeMap::<String, Vec<f64>>::new();
+        for (row, value) in values.into_iter().enumerate() {
+            job.check()?;
+            let Some(value) = value else { continue };
+            let key = &group_column.values[row];
+            if matches!(key, Scalar::Null) {
+                continue;
+            }
+            let label = scalar_text(
+                key,
+                &group_column.categories,
+                group_column.raw_text[row].as_deref(),
+            );
+            if label.trim().is_empty() {
+                continue;
+            }
+            groups.entry(label).or_default().push(value);
+        }
+        Ok(groups
+            .into_iter()
+            .map(|(label, values)| crate::statistics::GroupSample { label, values })
+            .collect())
     }
 
     pub(crate) fn write_parquet(&self, path: &std::path::Path, job: &Job) -> Result<()> {

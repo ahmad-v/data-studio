@@ -26,16 +26,16 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
-| quantiles | R7 quartiles, median and IQR; typed CSV/TSV/Parquet input excludes nulls | Linux interpolation and typed end-to-end fixture-tested |
-| standard-error | Sample standard error; typed numeric values reject lossy large-integer conversion | Linux sample-SD reference and precision-guard fixture-tested |
-| mean-ci | Two-sided 95% Student-t mean interval; typed CSV/TSV/Parquet input excludes nulls | Linux critical-value and typed operation fixture-tested |
-| bootstrap-mean-ci | Deterministic percentile bootstrap mean interval, 2,000 resamples; typed scalar input | Linux deterministic fixture-tested, 5,000-row cap |
-| bootstrap-median-ci | Deterministic percentile bootstrap median interval, 2,000 resamples; typed scalar input | Linux deterministic fixture-tested, 5,000-row cap |
-| welch-t-test | Unequal-variance two-sample t test, interval and p value | Linux t-distribution reference-tested |
-| paired-t-test | Paired two-sided Student-t test and interval | Linux difference-vector fixture-tested |
-| one-way-anova | Independent-groups one-way ANOVA | Linux reference fixture-tested |
-| spearman | Rank correlation with average ties and approximate p value | Linux tied-rank fixture-tested |
-| correlation-interval | Pearson Fisher-z interval | Linux bounded-interval fixture-tested |
+| quantiles | R7 quartiles, median and IQR; typed CSV/TSV, first-sheet XLSX and Parquet input excludes nulls and rejects lossy integer conversion | Linux interpolation and typed end-to-end fixtures; local suite passed 2026-11-28 |
+| standard-error | Sample standard error; typed numeric values reject lossy large-integer conversion | Linux sample-SD reference and precision-guard fixtures; local suite passed 2026-11-28 |
+| mean-ci | Two-sided 95% Student-t mean interval on typed inputs | Linux critical-value and typed operation fixtures; local suite passed 2026-11-28 |
+| bootstrap-mean-ci | Deterministic percentile bootstrap mean interval, 2,000 resamples; typed scalar inputs | Linux deterministic fixture, 5,000-row cap; local suite passed 2026-11-28 |
+| bootstrap-median-ci | Deterministic percentile bootstrap median interval, 2,000 resamples; typed scalar inputs | Linux deterministic fixture, 5,000-row cap; local suite passed 2026-11-28 |
+| welch-t-test | Unequal-variance two-sample t test using typed numeric columns; null and blank groups excluded | Linux t-distribution reference and grouped typed route fixtures; local suite passed 2026-11-28 |
+| paired-t-test | Paired two-sided Student-t test using typed columns and aligned complete pairs | Linux difference-vector and aligned-null fixtures; local suite passed 2026-11-28 |
+| one-way-anova | Independent-groups one-way ANOVA using typed numeric columns | Linux reference fixture; local suite passed 2026-11-28 |
+| spearman | Rank correlation using typed complete numeric pairs, average ties and approximate p value | Linux tied-rank fixture; local suite passed 2026-11-28 |
+| correlation-interval | Pearson Fisher-z interval using typed complete numeric pairs | Linux bounded-interval fixture; local suite passed 2026-11-28 |
 | recode-values | Exact cell mapping with unchanged fallback values | Linux route and project fixtures |
 | convert-number | Validate and normalize finite numeric text | Linux route and project fixtures |
 | convert-integer | Validate exact signed 64-bit integer text | Linux route and project fixtures |
