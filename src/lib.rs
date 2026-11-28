@@ -95,8 +95,8 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"reverse-rows",label:"Reverse row order",hint:"Reverses table rows without changing their cell values."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
- Operation{id:"line-chart",label:"Line chart SVG",hint:r#"Enter x-column,y-column or JSON {"x":"time","y":"signal","title":"…","x_axis":"…","y_axis":"…"}. Multi-series JSON: {"x":"time","series":["control","treatment"],"palette":"batlowS","title":"…","x_axis":"…","y_axis":"…"}. Multi-series figures use a licensed qualitative palette plus distinct markers and line patterns. Writes a new vector .svg."#},
- Operation{id:"scatter",label:"Scatter SVG",hint:r#"Enter x-column,y-column or JSON with x, y, title, x_axis and y_axis. Multi-series JSON accepts x, series, palette and labels as in line-chart. Uses the licensed batlowS palette by default with distinct markers. Writes a new vector .svg."#},
+ Operation{id:"line-chart",label:"Line chart",hint:r#"Enter x-column,y-column or JSON {"x":"time","y":"signal","title":"…","x_axis":"…","y_axis":"…","width_mm":210,"height_mm":148}. Multi-series JSON: {"x":"time","series":["control","treatment"],"palette":"batlowS",…}. Multi-series figures use a licensed qualitative palette plus distinct markers and line patterns. Writes a new vector .svg or .pdf; PDF sizes are in millimeters."#},
+ Operation{id:"scatter",label:"Scatter plot",hint:r#"Enter x-column,y-column or JSON with x, y, title, x_axis, y_axis, width_mm and height_mm. Multi-series JSON accepts x, series, palette and labels as in line-chart. Uses the licensed batlowS palette by default with distinct markers. Writes a new vector .svg or .pdf."#},
  Operation{id:"export",label:"Export",hint:"Export to .csv, .tsv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
 pub(crate) struct Table {
@@ -756,6 +756,24 @@ struct FigureParameters {
     title: Option<String>,
     x_axis: Option<String>,
     y_axis: Option<String>,
+    /// Physical PDF width; ignored for SVG exports.
+    width_mm: Option<f64>,
+    /// Physical PDF height; ignored for SVG exports.
+    height_mm: Option<f64>,
+}
+
+fn figure_dimensions(
+    request: Option<&FigureParameters>,
+) -> localwright_core::figure::FigureDimensions {
+    let (width_mm, height_mm) = request
+        .map(|request| {
+            (
+                request.width_mm.unwrap_or(210.0),
+                request.height_mm.unwrap_or(148.0),
+            )
+        })
+        .unwrap_or((210.0, 148.0));
+    localwright_core::figure::FigureDimensions::new(width_mm, height_mm)
 }
 
 fn figure_request(
@@ -883,7 +901,11 @@ fn export_multi_series_figure(
             Ok(FigureSeries::new(
                 name,
                 data,
-                colors.series_style(index, markers[index % markers.len()], index % 2 == 1)?,
+                colors.series_style_on_white(
+                    index,
+                    markers[index % markers.len()],
+                    index % 2 == 1,
+                )?,
             ))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -902,13 +924,24 @@ fn export_multi_series_figure(
         x_axis,
         y_axis,
     };
-    let svg = if operation == "line-chart" {
-        localwright_core::figure::line_series_svg_labeled(&figures, 1000, 640, labels)?
+    if output.extension().and_then(|extension| extension.to_str()) == Some("pdf") {
+        job.check()?;
+        let dimensions = figure_dimensions(Some(request));
+        let pdf = if operation == "line-chart" {
+            localwright_core::figure::line_series_pdf(&figures, dimensions, labels)?
+        } else {
+            localwright_core::figure::scatter_series_pdf(&figures, dimensions, labels)?
+        };
+        write_bytes(output, &pdf)?;
     } else {
-        localwright_core::figure::scatter_series_svg_labeled(&figures, 1000, 640, labels)?
-    };
-    job.check()?;
-    write_bytes(output, svg.as_bytes())?;
+        let svg = if operation == "line-chart" {
+            localwright_core::figure::line_series_svg_labeled(&figures, 1000, 640, labels)?
+        } else {
+            localwright_core::figure::scatter_series_svg_labeled(&figures, 1000, 640, labels)?
+        };
+        job.check()?;
+        write_bytes(output, svg.as_bytes())?;
+    }
     Ok(points.iter().map(Vec::len).sum())
 }
 
@@ -1716,21 +1749,21 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             } else {
                 None
             };
-            if let Some(request) = request.filter(|request| request.series.is_some()) {
-                if r.output
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    != Some("svg")
-                {
-                    return Err(Error::input("Expected .svg"));
+            let output_ext = r
+                .output
+                .extension()
+                .and_then(|extension| extension.to_str());
+            if let Some(request) = request.as_ref().filter(|request| request.series.is_some()) {
+                if !matches!(output_ext, Some("svg" | "pdf")) {
+                    return Err(Error::input("Expected .svg or .pdf"));
                 }
-                let count = export_multi_series_figure(&t, &request, &r.operation, &r.output, &j)?;
+                let count = export_multi_series_figure(&t, request, &r.operation, &r.output, &j)?;
                 written = Some(r.output);
                 format!("{count} complete series cases plotted; missing pairs excluded")
             } else {
                 let (a, b, title, x_axis, y_axis) = figure_request(&t, &r.parameter, &r.operation)?;
-                if r.output.extension().and_then(|x| x.to_str()) != Some("svg") {
-                    return Err(Error::input("Expected .svg"));
+                if !matches!(output_ext, Some("svg" | "pdf")) {
+                    return Err(Error::input("Expected .svg or .pdf"));
                 }
                 let mut points = vec![];
                 for row in &t.rows {
@@ -1751,7 +1784,25 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                     x_axis: &x_axis,
                     y_axis: &y_axis,
                 };
-                if r.operation == "line-chart" {
+                if output_ext == Some("pdf") {
+                    let dimensions = figure_dimensions(request.as_ref());
+                    let pdf = if r.operation == "line-chart" {
+                        localwright_core::figure::line_pdf(
+                            &points,
+                            dimensions,
+                            localwright_core::figure::SeriesStyle::MONOCHROME,
+                            labels,
+                        )?
+                    } else {
+                        localwright_core::figure::scatter_pdf(
+                            &points,
+                            dimensions,
+                            localwright_core::figure::SeriesStyle::MONOCHROME,
+                            labels,
+                        )?
+                    };
+                    write_bytes(&r.output, &pdf)?;
+                } else if r.operation == "line-chart" {
                     localwright_core::figure::export_line_svg_labeled(
                         &r.output,
                         &points,
@@ -3540,8 +3591,16 @@ mod tests {
         assert!(chart.contains("Value"));
         assert!(!chart.contains("<image"));
         let palette = localwright_core::palettes::palette("batlowS").unwrap();
-        assert!(chart.contains(palette.color(0).unwrap()));
-        assert!(chart.contains(palette.color(1).unwrap()));
+        let expected_first = palette
+            .series_style_on_white(0, localwright_core::figure::Marker::Circle, false)
+            .unwrap()
+            .color;
+        let expected_second = palette
+            .series_style_on_white(1, localwright_core::figure::Marker::Square, true)
+            .unwrap()
+            .color;
+        assert!(chart.contains(expected_first));
+        assert!(chart.contains(expected_second));
         assert!(chart.contains("<circle"));
         assert!(chart.contains("stroke-dasharray"));
 
@@ -3561,8 +3620,73 @@ mod tests {
         let scatter_svg = std::fs::read_to_string(scatter).unwrap();
         assert!(scatter_svg.contains("control"));
         assert!(scatter_svg.contains("treatment"));
-        assert!(scatter_svg.contains(palette.color(0).unwrap()));
-        assert!(scatter_svg.contains(palette.color(1).unwrap()));
+        assert!(scatter_svg.contains(expected_first));
+        assert!(scatter_svg.contains(expected_second));
+    }
+
+    #[test]
+    fn scientific_figure_exports_single_and_multi_series_pdf_without_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("series.csv");
+        std::fs::write(&input, "time,control,treatment\n0,1,2\n1,2,4\n2,3,6\n").unwrap();
+
+        let single = dir.path().join("single.pdf");
+        handle(
+            Request {
+                operation: "scatter".into(),
+                input: input.clone(),
+                output: single.clone(),
+                parameter:
+                    r#"{"x":"time","y":"control","title":"Control","width_mm":180,"height_mm":120}"#
+                        .into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let single_bytes = std::fs::read(&single).unwrap();
+        assert!(single_bytes.starts_with(b"%PDF-"));
+
+        let multi = dir.path().join("multi.pdf");
+        handle(
+            Request {
+                operation: "line-chart".into(),
+                input: input.clone(),
+                output: multi.clone(),
+                parameter: r#"{"x":"time","series":["control","treatment"],"title":"Trial","width_mm":210,"height_mm":148}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let multi_bytes = std::fs::read(&multi).unwrap();
+        assert!(multi_bytes.starts_with(b"%PDF-"));
+        assert!(handle(
+            Request {
+                operation: "line-chart".into(),
+                input: input.clone(),
+                output: multi.clone(),
+                parameter: r#"{"x":"time","series":["control","treatment"]}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .is_err());
+        assert_eq!(std::fs::read(&multi).unwrap(), multi_bytes);
+
+        let invalid = dir.path().join("invalid.pdf");
+        assert!(handle(
+            Request {
+                operation: "scatter".into(),
+                input,
+                output: invalid.clone(),
+                parameter: r#"{"x":"time","y":"control","width_mm":10}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .is_err());
+        assert!(!invalid.exists());
     }
 
     #[test]

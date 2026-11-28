@@ -207,7 +207,7 @@
     },
     {
       "operation": "line-chart",
-      "description": "Monochrome single-series or licensed qualitative-palette multi-series SVG line chart with legend and redundant marker/dash channels",
+      "description": "Monochrome single-series or licensed qualitative-palette multi-series SVG or physical-size vector PDF line chart with legend, contrast-filtered palette samples and redundant marker/dash channels",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
@@ -216,7 +216,7 @@
     },
     {
       "operation": "scatter",
-      "description": "Monochrome single-series or licensed qualitative-palette multi-series scatter SVG with legend and distinct markers",
+      "description": "Monochrome single-series or licensed qualitative-palette multi-series scatter SVG or physical-size vector PDF with legend, contrast-filtered palette samples and distinct markers",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
