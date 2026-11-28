@@ -198,9 +198,7 @@ fn typed_project_preview_workspace(
     };
 
     let schema_report = &report["schema"];
-    if schema_report["schema_version"].as_u64() != Some(1)
-        || !report["preview"].is_array()
-    {
+    if schema_report["schema_version"].as_u64() != Some(1) || !report["preview"].is_array() {
         return Ok(None);
     }
 
@@ -255,11 +253,9 @@ fn typed_project_preview_workspace(
                 nullable: column["nullable"]
                     .as_bool()
                     .ok_or_else(|| "typed project schema column has no nullable flag".to_owned())?,
-                missing: usize::try_from(
-                    column["missing"]
-                        .as_u64()
-                        .ok_or_else(|| "typed project schema column has no missing count".to_owned())?,
-                )
+                missing: usize::try_from(column["missing"].as_u64().ok_or_else(|| {
+                    "typed project schema column has no missing count".to_owned()
+                })?)
                 .map_err(|_| "typed project missing count exceeds the platform size".to_owned())?,
                 label: column["label"].as_str().map(str::to_owned),
                 unit: column["unit"].as_str().map(str::to_owned),
@@ -347,16 +343,16 @@ fn typed_project_preview_workspace(
                             .trim()
                             .parse::<u64>()
                             .map(CellValue::UnsignedInteger)
-                            .map_err(|_| "invalid unsigned integer project preview cell".to_owned()),
+                            .map_err(|_| {
+                                "invalid unsigned integer project preview cell".to_owned()
+                            }),
                         "float64" => text
                             .parse::<f64>()
                             .ok()
                             .filter(|number| number.is_finite())
                             .map(CellValue::Float)
                             .ok_or_else(|| "invalid float project preview cell".to_owned()),
-                        "date" | "time" | "datetime" => {
-                            Ok(CellValue::DateTime(text.to_owned()))
-                        }
+                        "date" | "time" | "datetime" => Ok(CellValue::DateTime(text.to_owned())),
                         "categorical" => Ok(CellValue::Categorical(text.to_owned())),
                         "null" => Err("non-null value in null-typed project column".into()),
                         _ => Err(format!(
@@ -498,23 +494,16 @@ mod tests {
             .expect("typed project table preview");
         assert_eq!(workspace.table.row_count(), 30);
         assert_eq!(workspace.schema[0].label.as_deref(), Some("Count"));
-        assert_eq!(
-            workspace.table.value_at(0, 0),
-            Some(&CellValue::Integer(0))
-        );
-        assert_eq!(
-            workspace.table.value_at(1, 0),
-            Some(&CellValue::Null)
-        );
+        assert_eq!(workspace.table.value_at(0, 0), Some(&CellValue::Integer(0)));
+        assert_eq!(workspace.table.value_at(1, 0), Some(&CellValue::Null));
         assert_eq!(workspace.table.value_at(1, 1), Some(&CellValue::Null));
         assert!(workspace.summary.contains("rows 1–30 of 40"));
         assert!(workspace
             .summary
             .contains("sorting and search affect these displayed rows only"));
-        assert!(workspace
-            .summary
-            .summary
-            .contains("blank cells in nullable string columns may represent either null or empty text"));
+        assert!(workspace.summary.summary.contains(
+            "blank cells in nullable string columns may represent either null or empty text"
+        ));
     }
 
     #[test]
