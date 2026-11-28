@@ -19,8 +19,10 @@ use std::{
 const MAX_SCHEMA_PARAMETER_BYTES: usize = 16 * 1024;
 const MAX_METADATA_CHARS: usize = 256;
 const MAX_EXAMPLE_CHARS: usize = 128;
-const MAX_WORKSPACE_PREVIEW_CELLS: usize = 10_000;
 const MAX_WORKSPACE_TEXT_CHARS: usize = 255;
+const MAX_WORKSPACE_QUERY_BYTES: usize = 16 * 1024;
+const MAX_WORKSPACE_QUERY_FILTERS: usize = 8;
+const MAX_WORKSPACE_PAGE_ROWS: usize = 100;
 
 /// Physical type selected for a column in a typed table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +93,88 @@ pub(crate) enum TextMatch {
     ContainsInsensitive,
     StartsWith,
     EndsWith,
+}
+
+/// A bounded query over the complete accepted dataset for a native table page.
+/// Filters and sorting are applied before the requested page is sliced.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct WorkspaceQuery {
+    pub(crate) worksheet: Option<String>,
+    pub(crate) offset: usize,
+    pub(crate) limit: Option<usize>,
+    pub(crate) filters: Vec<WorkspaceFilter>,
+    pub(crate) sort: Option<WorkspaceSort>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkspaceFilter {
+    pub(crate) column: String,
+    pub(crate) comparison: TypedComparison,
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkspaceSort {
+    pub(crate) column: String,
+    #[serde(default)]
+    pub(crate) descending: bool,
+}
+
+impl WorkspaceQuery {
+    pub(crate) fn from_json(json: &str) -> Result<Self> {
+        if json.len() > MAX_WORKSPACE_QUERY_BYTES {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Table query is limited to 16 KiB",
+            ));
+        }
+        let query: Self = if json.trim().is_empty() {
+            Self::default()
+        } else {
+            serde_json::from_str(json)?
+        };
+        if query.filters.len() > MAX_WORKSPACE_QUERY_FILTERS {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "A table query may contain at most eight filters",
+            ));
+        }
+        if query
+            .filters
+            .iter()
+            .any(|filter| filter.column.is_empty() || filter.value.len() > 1024)
+            || query
+                .sort
+                .as_ref()
+                .is_some_and(|sort| sort.column.is_empty())
+        {
+            return Err(Error::input(
+                "Table query columns must be named and filter values are limited to 1 KiB",
+            ));
+        }
+        if query.worksheet.as_ref().is_some_and(|worksheet| {
+            worksheet.is_empty()
+                || worksheet.chars().count() > MAX_METADATA_CHARS
+                || worksheet.chars().any(char::is_control)
+        }) {
+            return Err(Error::input(
+                "Worksheet names must be nonempty and at most 256 printable characters",
+            ));
+        }
+        if query.limit == Some(0)
+            || query
+                .limit
+                .is_some_and(|limit| limit > MAX_WORKSPACE_PAGE_ROWS)
+        {
+            return Err(Error::input(format!(
+                "Table page size must be between 1 and {MAX_WORKSPACE_PAGE_ROWS} rows"
+            )));
+        }
+        Ok(query)
+    }
 }
 
 /// Bounded, declarative arithmetic expression used by typed project pipelines.
@@ -761,25 +845,7 @@ impl TypedTable {
 
         let bytes = read_bounded(path, MAX_BYTES)?;
         job.check()?;
-        let mut zip = zip::ZipArchive::new(Cursor::new(bytes.as_slice()))
-            .map_err(|error| Error::input(error.to_string()))?;
-        if zip.len() > 4096 {
-            return Err(Error::input("Workbook archive member limit exceeded"));
-        }
-        let mut total = 0u64;
-        for index in 0..zip.len() {
-            job.check()?;
-            let entry = zip
-                .by_index(index)
-                .map_err(|error| Error::input(error.to_string()))?;
-            total = total
-                .checked_add(entry.size())
-                .ok_or_else(|| Error::input("Workbook expansion overflow"))?;
-            if total > 64 * 1024 * 1024 || entry.size() > 32 * 1024 * 1024 {
-                return Err(Error::input("Workbook declared expansion limit exceeded"));
-            }
-        }
-        drop(zip);
+        super::xlsx_safety::validate_workbook(&bytes, job)?;
 
         let mut workbook: Xlsx<_> =
             calamine::open_workbook_from_rs::<Xlsx<_>, _>(Cursor::new(bytes))
@@ -1858,8 +1924,174 @@ impl TypedTable {
         Ok(())
     }
 
+    /// Build the descriptive grouped-statistics result using typed key and
+    /// numeric columns while retaining the established output header contract.
+    pub(crate) fn group_summary(
+        &self,
+        group_name: &str,
+        value_name: &str,
+        job: &Job,
+    ) -> Result<Self> {
+        struct Summary {
+            key: Scalar,
+            raw_text: Option<String>,
+            n: i64,
+            missing: i64,
+            mean: f64,
+            m2: f64,
+            min: f64,
+            max: f64,
+        }
+
+        let group_column = &self.columns[self.column_index(group_name)?];
+        let value_column = &self.columns[self.column_index(value_name)?];
+        if !matches!(
+            value_column.kind,
+            ColumnType::Null | ColumnType::Int64 | ColumnType::UInt64 | ColumnType::Float64
+        ) {
+            return Err(Error::input(format!(
+                "Summary column {value_name:?} must have a numeric type"
+            )));
+        }
+
+        let mut lookup = HashMap::<String, usize>::new();
+        let mut groups = Vec::<Summary>::new();
+        for row in 0..self.rows {
+            job.check()?;
+            let key_value = &group_column.values[row];
+            let key = typed_join_key(group_column, key_value)?.unwrap_or_else(|| "n:".into());
+            let group_index = if let Some(index) = lookup.get(&key) {
+                *index
+            } else {
+                if groups.len() >= MAX_CELLS / 7 {
+                    return Err(Error::new(
+                        ErrorKind::Limit,
+                        "Grouped summary exceeds the typed cell limit",
+                    ));
+                }
+                let index = groups.len();
+                lookup.insert(key, index);
+                groups.push(Summary {
+                    key: key_value.clone(),
+                    raw_text: group_column.raw_text[row].clone(),
+                    n: 0,
+                    missing: 0,
+                    mean: 0.0,
+                    m2: 0.0,
+                    min: f64::INFINITY,
+                    max: f64::NEG_INFINITY,
+                });
+                index
+            };
+            let group = &mut groups[group_index];
+            let Some(value) = scalar_to_f64(value_column, &value_column.values[row])? else {
+                group.missing = group.missing.checked_add(1).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Limit,
+                        "Missing-value count exceeds the supported range",
+                    )
+                })?;
+                continue;
+            };
+            let next_n = group.n.checked_add(1).ok_or_else(|| {
+                Error::new(ErrorKind::Limit, "Group count exceeds the supported range")
+            })?;
+            let delta = value - group.mean;
+            group.mean += delta / next_n as f64;
+            group.m2 += delta * (value - group.mean);
+            group.min = group.min.min(value);
+            group.max = group.max.max(value);
+            if !group.mean.is_finite() || !group.m2.is_finite() {
+                return Err(Error::input("Numerical overflow in grouped summary"));
+            }
+            group.n = next_n;
+        }
+
+        let mut order = (0..groups.len()).collect::<Vec<_>>();
+        order.sort_by(|left, right| {
+            let label = |index: usize| {
+                let group = &groups[index];
+                scalar_text(
+                    &group.key,
+                    &group_column.categories,
+                    group.raw_text.as_deref(),
+                )
+            };
+            label(*left).cmp(&label(*right))
+        });
+        let groups = order
+            .iter()
+            .map(|index| &groups[*index])
+            .collect::<Vec<_>>();
+
+        let mut group_output = group_column.clone();
+        group_output.name = "group".into();
+        group_output.values = groups.iter().map(|group| group.key.clone()).collect();
+        group_output.raw_text = groups.iter().map(|group| group.raw_text.clone()).collect();
+        let count_column = |name: &str, select: fn(&Summary) -> i64| Column {
+            name: name.into(),
+            kind: ColumnType::Int64,
+            values: groups
+                .iter()
+                .map(|group| Scalar::Int64(select(group)))
+                .collect(),
+            raw_text: vec![None; groups.len()],
+            categories: Vec::new(),
+            metadata: ColumnMetadata {
+                label: Some(name.into()),
+                unit: None,
+            },
+        };
+        let numeric_column =
+            |name: &str, unit: Option<String>, select: fn(&Summary) -> Option<f64>| Column {
+                name: name.into(),
+                kind: ColumnType::Float64,
+                values: groups
+                    .iter()
+                    .map(|group| select(group).map_or(Scalar::Null, Scalar::Float64))
+                    .collect(),
+                raw_text: vec![None; groups.len()],
+                categories: Vec::new(),
+                metadata: ColumnMetadata {
+                    label: Some(name.into()),
+                    unit,
+                },
+            };
+        let columns = vec![
+            group_output,
+            count_column("n", |group| group.n),
+            count_column("missing", |group| group.missing),
+            numeric_column("mean", value_column.metadata.unit.clone(), |group| {
+                (group.n > 0).then_some(group.mean)
+            }),
+            numeric_column("sample_sd", value_column.metadata.unit.clone(), |group| {
+                (group.n > 1).then(|| (group.m2 / (group.n - 1) as f64).max(0.0).sqrt())
+            }),
+            numeric_column("min", value_column.metadata.unit.clone(), |group| {
+                (group.n > 0).then_some(group.min)
+            }),
+            numeric_column("max", value_column.metadata.unit.clone(), |group| {
+                (group.n > 0).then_some(group.max)
+            }),
+        ];
+        Ok(Self {
+            columns,
+            rows: groups.len(),
+        })
+    }
+
     /// Stable, ascending sort using the typed value; nulls always sort after values.
     pub(crate) fn sort_by(&mut self, name: &str, job: &Job) -> Result<()> {
+        self.sort_by_direction(name, false, job)
+    }
+
+    /// Stable typed sort that keeps nulls last in both directions.
+    pub(crate) fn sort_by_direction(
+        &mut self,
+        name: &str,
+        descending: bool,
+        job: &Job,
+    ) -> Result<()> {
         let index = self.column_index(name)?;
         let column = &self.columns[index];
         validate_datetime_ordering(column)?;
@@ -1871,14 +2103,22 @@ impl TypedTable {
                 cancelled = true;
                 return std::cmp::Ordering::Equal;
             }
-            match compare_scalar(column, &column.values[*left], &column.values[*right]) {
-                Ok(ordering) => ordering,
-                Err(error) => {
-                    if comparison_error.is_none() {
-                        comparison_error = Some(error);
+            let left_value = &column.values[*left];
+            let right_value = &column.values[*right];
+            match (left_value, right_value) {
+                (Scalar::Null, Scalar::Null) => std::cmp::Ordering::Equal,
+                (Scalar::Null, _) => std::cmp::Ordering::Greater,
+                (_, Scalar::Null) => std::cmp::Ordering::Less,
+                _ => match compare_scalar(column, left_value, right_value) {
+                    Ok(ordering) if descending => ordering.reverse(),
+                    Ok(ordering) => ordering,
+                    Err(error) => {
+                        if comparison_error.is_none() {
+                            comparison_error = Some(error);
+                        }
+                        std::cmp::Ordering::Equal
                     }
-                    std::cmp::Ordering::Equal
-                }
+                },
             }
         });
         if cancelled {
@@ -2184,13 +2424,55 @@ impl TypedTable {
         })
     }
 
-    /// Build a bounded JSON preview consumed by the native paginated table workspace.
-    pub(crate) fn workspace_report(&self, job: &Job) -> Result<serde_json::Value> {
-        let displayed_rows = self
-            .rows
-            .min((MAX_WORKSPACE_PREVIEW_CELLS / self.columns.len().max(1)).max(1));
+    /// Apply a typed, dataset-wide table query and return only its requested page.
+    pub(crate) fn workspace_query_report(
+        &mut self,
+        query: WorkspaceQuery,
+        job: &Job,
+    ) -> Result<serde_json::Value> {
+        let source_rows = self.rows;
+        for filter in &query.filters {
+            job.check()?;
+            self.filter_compare(&filter.column, filter.comparison, &filter.value, job)?;
+        }
+        if let Some(sort) = &query.sort {
+            job.check()?;
+            self.sort_by_direction(&sort.column, sort.descending, job)?;
+        }
+        let limit = query.limit.unwrap_or(MAX_WORKSPACE_PAGE_ROWS);
+        let mut report = self.workspace_page_report(query.offset, limit, job)?;
+        let object = report
+            .as_object_mut()
+            .ok_or_else(|| Error::input("Unable to construct table query report"))?;
+        object.insert("source_rows".into(), serde_json::json!(source_rows));
+        object.insert(
+            "dataset_filtered".into(),
+            serde_json::json!(!query.filters.is_empty()),
+        );
+        object.insert(
+            "dataset_sort_column".into(),
+            query.sort.as_ref().map_or(serde_json::Value::Null, |sort| {
+                serde_json::json!(sort.column)
+            }),
+        );
+        object.insert(
+            "dataset_sort_descending".into(),
+            serde_json::json!(query.sort.as_ref().is_some_and(|sort| sort.descending)),
+        );
+        Ok(report)
+    }
+
+    fn workspace_page_report(
+        &self,
+        offset: usize,
+        limit: usize,
+        job: &Job,
+    ) -> Result<serde_json::Value> {
+        let row_offset = offset.min(self.rows);
+        let displayed_rows = limit.min(self.rows.saturating_sub(row_offset));
+        let row_end = row_offset + displayed_rows;
         let mut rows = Vec::with_capacity(displayed_rows);
-        for row in 0..displayed_rows {
+        for row in row_offset..row_end {
             job.check()?;
             rows.push(
                 self.columns
@@ -2241,8 +2523,9 @@ impl TypedTable {
             "workspace_version": 1,
             "rows": rows,
             "total_rows": self.rows,
+            "row_offset": row_offset,
             "displayed_rows": displayed_rows,
-            "truncated": displayed_rows < self.rows,
+            "truncated": row_end < self.rows,
             "headers": self.columns.iter().map(|column| &column.name).collect::<Vec<_>>(),
             "schema": schema,
         });
@@ -3197,19 +3480,21 @@ mod tests {
     }
 
     #[test]
-    fn workspace_report_bounds_rows_cells_and_text_and_observes_cancellation() {
+    fn workspace_page_report_bounds_rows_and_text_and_observes_cancellation() {
         let long_text = "x".repeat(1_024);
         let source = crate::validate(
             vec!["note".into()],
-            (0..MAX_WORKSPACE_PREVIEW_CELLS + 1)
+            (0..MAX_WORKSPACE_PAGE_ROWS + 1)
                 .map(|_| vec![long_text.clone()])
                 .collect(),
         )
         .unwrap();
         let typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
-        let report = typed.workspace_report(&Job::new()).unwrap();
-        assert_eq!(report["total_rows"], MAX_WORKSPACE_PREVIEW_CELLS + 1);
-        assert_eq!(report["displayed_rows"], MAX_WORKSPACE_PREVIEW_CELLS);
+        let report = typed
+            .workspace_page_report(0, MAX_WORKSPACE_PAGE_ROWS, &Job::new())
+            .unwrap();
+        assert_eq!(report["total_rows"], MAX_WORKSPACE_PAGE_ROWS + 1);
+        assert_eq!(report["displayed_rows"], MAX_WORKSPACE_PAGE_ROWS);
         assert_eq!(report["truncated"], true);
         assert_eq!(
             report["rows"][0][0].as_str().unwrap().chars().count(),
@@ -3218,7 +3503,77 @@ mod tests {
 
         let cancelled = Job::new();
         cancelled.cancel();
-        assert!(typed.workspace_report(&cancelled).is_err());
+        assert!(typed
+            .workspace_page_report(0, MAX_WORKSPACE_PAGE_ROWS, &cancelled)
+            .is_err());
+    }
+
+    #[test]
+    fn workspace_query_filters_and_sorts_entire_typed_dataset_before_paging() {
+        let source = table(
+            vec!["id", "score"],
+            vec![
+                vec!["1", "1"],
+                vec!["2", "5"],
+                vec!["3", "3"],
+                vec!["4", " "],
+                vec!["5", "4"],
+                vec!["6", "2"],
+            ],
+        );
+        let mut typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
+        let query = WorkspaceQuery::from_json(
+            r#"{"filters":[{"column":"score","comparison":"gte","value":"2"}],"sort":{"column":"score","descending":true},"offset":1,"limit":2}"#,
+        )
+        .unwrap();
+        let report = typed.workspace_query_report(query, &Job::new()).unwrap();
+        assert_eq!(report["source_rows"], 6);
+        assert_eq!(report["total_rows"], 4);
+        assert_eq!(report["row_offset"], 1);
+        assert_eq!(report["displayed_rows"], 2);
+        assert_eq!(report["dataset_filtered"], true);
+        assert_eq!(report["dataset_sort_column"], "score");
+        assert_eq!(report["rows"][0][0], 5);
+        assert_eq!(report["rows"][1][0], 3);
+    }
+
+    #[test]
+    fn descending_workspace_sort_keeps_nulls_after_values_and_offsets_clamp() {
+        let source = table(
+            vec!["id", "score"],
+            vec![vec!["1", "1"], vec!["2", " "], vec!["3", "2"]],
+        );
+        let mut typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
+        let query = WorkspaceQuery::from_json(
+            r#"{"sort":{"column":"score","descending":true},"offset":1,"limit":2}"#,
+        )
+        .unwrap();
+        let report = typed.workspace_query_report(query, &Job::new()).unwrap();
+        assert_eq!(report["rows"][0][0], 1);
+        assert_eq!(report["rows"][1][0], 2);
+
+        let empty = WorkspaceQuery::from_json(r#"{"offset":99}"#).unwrap();
+        let report = typed.workspace_query_report(empty, &Job::new()).unwrap();
+        assert_eq!(report["row_offset"], 3);
+        assert_eq!(report["displayed_rows"], 0);
+        assert_eq!(report["truncated"], false);
+    }
+
+    #[test]
+    fn workspace_query_rejects_unbounded_or_ambiguous_pages() {
+        assert!(WorkspaceQuery::from_json(r#"{"limit":0}"#).is_err());
+        assert!(WorkspaceQuery::from_json(r#"{"limit":101}"#).is_err());
+        assert!(WorkspaceQuery::from_json(r#"{"unknown":1}"#).is_err());
+        let too_many_filters = serde_json::json!({
+            "filters": (0..9)
+                .map(|_| serde_json::json!({
+                    "column": "id",
+                    "comparison": "eq",
+                    "value": "1"
+                }))
+                .collect::<Vec<_>>()
+        });
+        assert!(WorkspaceQuery::from_json(&too_many_filters.to_string()).is_err());
     }
 
     #[test]

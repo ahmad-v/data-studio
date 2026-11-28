@@ -5,6 +5,7 @@ mod sql;
 mod statistics;
 mod transform;
 mod typed;
+mod xlsx_safety;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx};
@@ -18,7 +19,7 @@ use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
  Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or supported flat scalar Parquet columns as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"inspect-schema",label:"Inspect typed schema",hint:r#"Optional JSON: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates per-column types and missing values without changing source data. Optional new .json report."#},
- Operation{id:"inspect-table",label:"Inspect typed table",hint:"Load the selected CSV, TSV, XLSX worksheet or scalar Parquet table into the native paginated Data table workspace. The view is capped at 10,000 cells, cell text at 256 characters; sorting applies to the loaded preview only. Inspect types, null counts, labels and units; no output is written."},
+ Operation{id:"inspect-table",label:"Inspect typed table",hint:r#"Optional JSON query: {"worksheet":"Data","filters":[{"column":"score","comparison":"gte","value":"10"}],"sort":{"column":"date","descending":true},"offset":0,"limit":100}. `worksheet` is optional for XLSX (leave blank/default for the first sheet); a plain worksheet name remains supported. Up to eight typed filters and optional stable sort apply to the complete accepted dataset before the requested page is selected. Use offsets to inspect additional pages. Table header sort applies only to the displayed page. This operation loads the bounded dataset in memory; current file/cell limits still apply. Optional output is not supported."#},
  Operation{id:"export-typed-parquet",label:"Export typed Parquet",hint:r#"Required JSON schema options: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates primitive types, nulls and categoricals, then writes a new typed .parquet file."#},
  Operation{id:"filter",label:"Filter",hint:"Enter column=value. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs use inferred typed equality for previews and supported outputs; numeric 010 matches numeric 10. CSV/TSV output serializes nulls as empty fields."},
  Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs use typed columns for previews and supported outputs. CSV/TSV output serializes nulls as empty fields."},
@@ -35,7 +36,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Version 1 projects keep their original text behavior unless they include `typed_schema`. Version 2 projects use the typed pipeline with inferred columns by default; optional `typed_schema` provides overrides and metadata. Typed projects support schema-aware filters and numeric expressions, typed constant/index columns, atomic multi-column rename and drop, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving missing-value fills. Typed results are saved to a new .parquet file. Join paths are relative to the project file unless absolute."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
- Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
+ Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. CSV, TSV, first-sheet XLSX and supported scalar Parquet use typed keys/values; reports counts, missing values, mean, sample SD and range."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"quantiles",label:"Quantiles and IQR",hint:"Parameter: inferred numeric column. CSV, TSV, first-worksheet XLSX and Parquet values use typed columns; nulls are excluded and unsafe integer-to-float conversions are rejected."},
  Operation{id:"standard-error",label:"Standard error",hint:"Parameter: inferred numeric column. CSV, TSV, first-worksheet XLSX and Parquet use typed columns; nulls are excluded."},
@@ -94,8 +95,8 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"reverse-rows",label:"Reverse row order",hint:"Reverses table rows without changing their cell values."},
  Operation{id:"correlation",label:"Pearson correlation",hint:"Enter x-column,y-column. Blank pairs excluded; numeric values must be finite."},
  Operation{id:"linear-regression",label:"Simple linear regression",hint:"Enter predictor,response. Fits an intercept and slope to finite numeric complete pairs."},
- Operation{id:"line-chart",label:"Line chart SVG",hint:r#"Enter x-column,y-column or JSON {"x":"time","y":"signal","title":"…","x_axis":"…","y_axis":"…"}. Multi-series JSON: {"x":"time","series":["control","treatment"],"palette":"batlowS","title":"…","x_axis":"…","y_axis":"…"}. Multi-series figures use a licensed qualitative palette plus distinct markers and line patterns. Writes a new vector .svg."#},
- Operation{id:"scatter",label:"Scatter SVG",hint:r#"Enter x-column,y-column or JSON with x, y, title, x_axis and y_axis. Multi-series JSON accepts x, series, palette and labels as in line-chart. Uses the licensed batlowS palette by default with distinct markers. Writes a new vector .svg."#},
+ Operation{id:"line-chart",label:"Line chart",hint:r#"Enter x-column,y-column or JSON {"x":"time","y":"signal","title":"…","x_axis":"…","y_axis":"…","width_mm":210,"height_mm":148}. Multi-series JSON: {"x":"time","series":["control","treatment"],"palette":"batlowS",…}. The current Data Studio renderer accepts qualitative batlowS only; Localwright also bundles sequential and diverging maps that are not exposed by this chart yet. Multi-series figures use distinct markers and line patterns. Writes a new vector .svg or .pdf; PDF sizes are in millimeters."#},
+ Operation{id:"scatter",label:"Scatter plot",hint:r#"Enter x-column,y-column or JSON with x, y, title, x_axis, y_axis, width_mm and height_mm. Multi-series JSON accepts x, series, palette and labels as in line-chart; palette is qualitative batlowS only. Localwright also bundles sequential and diverging maps that are not exposed by this chart yet. Uses distinct markers. Writes a new vector .svg or .pdf."#},
  Operation{id:"export",label:"Export",hint:"Export to .csv, .tsv or .parquet as text. For XLSX, enter a worksheet name or leave blank for the first sheet."}];
 #[derive(Debug)]
 pub(crate) struct Table {
@@ -291,22 +292,7 @@ fn load(p: &Path, sheet: Option<&str>, j: &Job) -> Result<Table> {
             validate(headers, rows)
         }
         Some("xlsx") => {
-            let mut zip = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).map_err(err)?;
-            if zip.len() > 4096 {
-                return Err(Error::input("Workbook archive member limit exceeded"));
-            }
-            let mut total = 0u64;
-            for i in 0..zip.len() {
-                j.check()?;
-                let entry = zip.by_index(i).map_err(err)?;
-                total = total
-                    .checked_add(entry.size())
-                    .ok_or_else(|| Error::input("Workbook expansion overflow"))?;
-                if total > 64 * 1024 * 1024 || entry.size() > 32 * 1024 * 1024 {
-                    return Err(Error::input("Workbook declared expansion limit exceeded"));
-                }
-            }
-            drop(zip);
+            xlsx_safety::validate_workbook(&bytes, j)?;
             let mut book: Xlsx<_> =
                 calamine::open_workbook_from_rs(Cursor::new(bytes)).map_err(err)?;
             let names = book.sheet_names();
@@ -770,6 +756,24 @@ struct FigureParameters {
     title: Option<String>,
     x_axis: Option<String>,
     y_axis: Option<String>,
+    /// Physical PDF width; ignored for SVG exports.
+    width_mm: Option<f64>,
+    /// Physical PDF height; ignored for SVG exports.
+    height_mm: Option<f64>,
+}
+
+fn figure_dimensions(
+    request: Option<&FigureParameters>,
+) -> localwright_core::figure::FigureDimensions {
+    let (width_mm, height_mm) = request
+        .map(|request| {
+            (
+                request.width_mm.unwrap_or(210.0),
+                request.height_mm.unwrap_or(148.0),
+            )
+        })
+        .unwrap_or((210.0, 148.0));
+    localwright_core::figure::FigureDimensions::new(width_mm, height_mm)
 }
 
 fn figure_request(
@@ -897,7 +901,11 @@ fn export_multi_series_figure(
             Ok(FigureSeries::new(
                 name,
                 data,
-                colors.series_style(index, markers[index % markers.len()], index % 2 == 1)?,
+                colors.series_style_on_white(
+                    index,
+                    markers[index % markers.len()],
+                    index % 2 == 1,
+                )?,
             ))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -916,13 +924,24 @@ fn export_multi_series_figure(
         x_axis,
         y_axis,
     };
-    let svg = if operation == "line-chart" {
-        localwright_core::figure::line_series_svg_labeled(&figures, 1000, 640, labels)?
+    if output.extension().and_then(|extension| extension.to_str()) == Some("pdf") {
+        job.check()?;
+        let dimensions = figure_dimensions(Some(request));
+        let pdf = if operation == "line-chart" {
+            localwright_core::figure::line_series_pdf(&figures, dimensions, labels)?
+        } else {
+            localwright_core::figure::scatter_series_pdf(&figures, dimensions, labels)?
+        };
+        write_bytes(output, &pdf)?;
     } else {
-        localwright_core::figure::scatter_series_svg_labeled(&figures, 1000, 640, labels)?
-    };
-    job.check()?;
-    write_bytes(output, svg.as_bytes())?;
+        let svg = if operation == "line-chart" {
+            localwright_core::figure::line_series_svg_labeled(&figures, 1000, 640, labels)?
+        } else {
+            localwright_core::figure::scatter_series_svg_labeled(&figures, 1000, 640, labels)?
+        };
+        job.check()?;
+        write_bytes(output, svg.as_bytes())?;
+    }
     Ok(points.iter().map(Vec::len).sum())
 }
 
@@ -1272,6 +1291,7 @@ fn try_typed_basic_operation(
             | "reverse-rows"
             | "group-sum"
             | "group-mean"
+            | "group-summary"
             | "inner-join"
             | "left-join"
             | "right-join"
@@ -1312,7 +1332,15 @@ fn try_typed_basic_operation(
     } else {
         None
     };
-    let step = if join_request.is_none() {
+    let summary_request = if operation == "group-summary" {
+        let (group, value) = parameter
+            .split_once(',')
+            .ok_or_else(|| Error::input("Expected group-column,value-column"))?;
+        Some((group, value))
+    } else {
+        None
+    };
+    let step = if join_request.is_none() && summary_request.is_none() {
         let Some(step) = request_step(operation, parameter)? else {
             return Ok(None);
         };
@@ -1336,6 +1364,8 @@ fn try_typed_basic_operation(
             _ => join::Kind::Inner,
         };
         table = table.join(right, &options.left_key, &options.right_key, kind, job)?;
+    } else if let Some((group, value)) = summary_request {
+        table = table.group_summary(group, value, job)?;
     } else {
         match step.expect("non-join operations have a parsed typed step") {
             Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
@@ -1550,9 +1580,8 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     };
     let sheet = match &project {
         Some(project) => project.worksheet.as_deref(),
-        None => (matches!(r.operation.as_str(), "preview" | "export" | "inspect-table")
-            && !r.parameter.is_empty())
-        .then_some(r.parameter.as_str()),
+        None => (matches!(r.operation.as_str(), "preview" | "export") && !r.parameter.is_empty())
+            .then_some(r.parameter.as_str()),
     };
     if project.is_some()
         && sheet.is_some()
@@ -1582,12 +1611,36 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 "Inspect typed table does not write an output file",
             ));
         }
-        let typed =
+        let is_xlsx = r
+            .input
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("xlsx"));
+        let legacy_worksheet = if is_xlsx
+            && !r.parameter.trim().is_empty()
+            && !r.parameter.trim_start().starts_with('{')
+        {
+            Some(r.parameter.as_str())
+        } else {
+            None
+        };
+        let query = if legacy_worksheet.is_some() {
+            typed::WorkspaceQuery::default()
+        } else {
+            typed::WorkspaceQuery::from_json(&r.parameter)?
+        };
+        if query.worksheet.is_some() && !is_xlsx {
+            return Err(Error::input(
+                "Table worksheet selection requires XLSX input",
+            ));
+        }
+        let sheet = query.worksheet.as_deref().or(legacy_worksheet);
+        let mut typed =
             typed::TypedTable::from_path(&r.input, sheet, typed::SchemaRequest::default(), &j)?;
-        let report = serde_json::to_string(&typed.workspace_report(&j)?)?;
+        let report = serde_json::to_string(&typed.workspace_query_report(query, &j)?)?;
         return Ok(Outcome {
             preview: report,
-            warnings: vec!["Loaded typed values for the native table workspace. Blank cells remain null, explicit empty strings remain text, and the source file is unchanged.".into()],
+            warnings: vec!["Typed filters and sorting run over the complete accepted dataset before page selection. Re-run with a different offset to navigate. Header sorting and table search apply only to the returned page. Inspection is in-memory and remains subject to input and cell limits; the source is unchanged.".into()],
             ..Outcome::default()
         });
     }
@@ -1719,21 +1772,21 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
             } else {
                 None
             };
-            if let Some(request) = request.filter(|request| request.series.is_some()) {
-                if r.output
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    != Some("svg")
-                {
-                    return Err(Error::input("Expected .svg"));
+            let output_ext = r
+                .output
+                .extension()
+                .and_then(|extension| extension.to_str());
+            if let Some(request) = request.as_ref().filter(|request| request.series.is_some()) {
+                if !matches!(output_ext, Some("svg" | "pdf")) {
+                    return Err(Error::input("Expected .svg or .pdf"));
                 }
-                let count = export_multi_series_figure(&t, &request, &r.operation, &r.output, &j)?;
+                let count = export_multi_series_figure(&t, request, &r.operation, &r.output, &j)?;
                 written = Some(r.output);
                 format!("{count} complete series cases plotted; missing pairs excluded")
             } else {
                 let (a, b, title, x_axis, y_axis) = figure_request(&t, &r.parameter, &r.operation)?;
-                if r.output.extension().and_then(|x| x.to_str()) != Some("svg") {
-                    return Err(Error::input("Expected .svg"));
+                if !matches!(output_ext, Some("svg" | "pdf")) {
+                    return Err(Error::input("Expected .svg or .pdf"));
                 }
                 let mut points = vec![];
                 for row in &t.rows {
@@ -1754,7 +1807,25 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                     x_axis: &x_axis,
                     y_axis: &y_axis,
                 };
-                if r.operation == "line-chart" {
+                if output_ext == Some("pdf") {
+                    let dimensions = figure_dimensions(request.as_ref());
+                    let pdf = if r.operation == "line-chart" {
+                        localwright_core::figure::line_pdf(
+                            &points,
+                            dimensions,
+                            localwright_core::figure::SeriesStyle::MONOCHROME,
+                            labels,
+                        )?
+                    } else {
+                        localwright_core::figure::scatter_pdf(
+                            &points,
+                            dimensions,
+                            localwright_core::figure::SeriesStyle::MONOCHROME,
+                            labels,
+                        )?
+                    };
+                    write_bytes(&r.output, &pdf)?;
+                } else if r.operation == "line-chart" {
                     localwright_core::figure::export_line_svg_labeled(
                         &r.output,
                         &points,
@@ -2159,6 +2230,83 @@ mod tests {
         assert!((sample_sd - 2.0f64.sqrt()).abs() < 1e-12);
         assert_eq!(table.rows[1], ["B", "1", "0", "2", "", "2", "2"]);
         assert_eq!(table.rows[2], ["C", "0", "1", "", "", "", ""]);
+    }
+
+    #[test]
+    fn grouped_summary_exports_typed_counts_and_statistics() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let output = dir.path().join("summary.parquet");
+        let source = "group,x\nA,1\nA,3\nB,2\nC,\n";
+        std::fs::write(&input, source).unwrap();
+        let outcome = handle(
+            Request {
+                operation: "group-summary".into(),
+                parameter: "group,x".into(),
+                input: input.clone(),
+                output: output.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+        assert_eq!(
+            report["headers"],
+            serde_json::json!(["group", "n", "missing", "mean", "sample_sd", "min", "max"])
+        );
+        assert_eq!(report["schema"]["columns"][1]["type"], "int64");
+        assert_eq!(report["schema"]["columns"][2]["type"], "int64");
+        for column in ["mean", "sample_sd", "min", "max"] {
+            let index = report["headers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|header| header == column)
+                .unwrap();
+            assert_eq!(report["schema"]["columns"][index]["type"], "float64");
+        }
+        assert_eq!(std::fs::read_to_string(input).unwrap(), source);
+        assert!(output.is_file());
+    }
+
+    #[test]
+    fn grouped_summary_accepts_typed_xlsx_and_parquet_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("source.xlsx");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/table.xlsx");
+        std::fs::copy(fixture, &input).unwrap();
+        let parquet = dir.path().join("summary.parquet");
+        let first = handle(
+            Request {
+                operation: "group-summary".into(),
+                parameter: "group,x".into(),
+                input,
+                output: parquet.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let first_report: serde_json::Value = serde_json::from_str(&first.preview).unwrap();
+        assert_eq!(first_report["rows"], 2);
+        assert_eq!(first_report["schema"]["columns"][1]["type"], "int64");
+
+        let second = handle(
+            Request {
+                operation: "group-summary".into(),
+                parameter: "group,mean".into(),
+                input: parquet,
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let second_report: serde_json::Value = serde_json::from_str(&second.preview).unwrap();
+        assert_eq!(second_report["rows"], 2);
+        assert_eq!(second_report["schema"]["columns"][1]["type"], "int64");
+        assert_eq!(second_report["preview"][0][0], "a");
+        assert_eq!(second_report["preview"][0][3], "1");
     }
 
     #[test]
@@ -2686,6 +2834,30 @@ mod tests {
         assert_eq!(scores.value(0), 1.5);
         assert_eq!(scores.value(1), 1.5);
         assert!(scores.is_null(2));
+    }
+
+    #[test]
+    fn native_table_query_applies_dataset_filter_sort_and_page_parameters() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("table.csv");
+        std::fs::write(&input, "id,score\n1,1\n2,5\n3,3\n4, \n5,4\n6,2\n").unwrap();
+        let outcome = handle(
+            Request {
+                operation: "inspect-table".into(),
+                input,
+                parameter: r#"{"filters":[{"column":"score","comparison":"gte","value":"2"}],"sort":{"column":"score","descending":true},"offset":1,"limit":2}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+        assert_eq!(report["source_rows"], 6);
+        assert_eq!(report["total_rows"], 4);
+        assert_eq!(report["row_offset"], 1);
+        assert_eq!(report["rows"][0][0], 5);
+        assert_eq!(report["rows"][1][0], 3);
+        assert!(outcome.warnings[0].contains("complete accepted dataset"));
     }
 
     #[test]
@@ -3466,8 +3638,16 @@ mod tests {
         assert!(chart.contains("Value"));
         assert!(!chart.contains("<image"));
         let palette = localwright_core::palettes::palette("batlowS").unwrap();
-        assert!(chart.contains(palette.color(0).unwrap()));
-        assert!(chart.contains(palette.color(1).unwrap()));
+        let expected_first = palette
+            .series_style_on_white(0, localwright_core::figure::Marker::Circle, false)
+            .unwrap()
+            .color;
+        let expected_second = palette
+            .series_style_on_white(1, localwright_core::figure::Marker::Square, true)
+            .unwrap()
+            .color;
+        assert!(chart.contains(expected_first));
+        assert!(chart.contains(expected_second));
         assert!(chart.contains("<circle"));
         assert!(chart.contains("stroke-dasharray"));
 
@@ -3487,8 +3667,73 @@ mod tests {
         let scatter_svg = std::fs::read_to_string(scatter).unwrap();
         assert!(scatter_svg.contains("control"));
         assert!(scatter_svg.contains("treatment"));
-        assert!(scatter_svg.contains(palette.color(0).unwrap()));
-        assert!(scatter_svg.contains(palette.color(1).unwrap()));
+        assert!(scatter_svg.contains(expected_first));
+        assert!(scatter_svg.contains(expected_second));
+    }
+
+    #[test]
+    fn scientific_figure_exports_single_and_multi_series_pdf_without_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("series.csv");
+        std::fs::write(&input, "time,control,treatment\n0,1,2\n1,2,4\n2,3,6\n").unwrap();
+
+        let single = dir.path().join("single.pdf");
+        handle(
+            Request {
+                operation: "scatter".into(),
+                input: input.clone(),
+                output: single.clone(),
+                parameter:
+                    r#"{"x":"time","y":"control","title":"Control","width_mm":180,"height_mm":120}"#
+                        .into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let single_bytes = std::fs::read(&single).unwrap();
+        assert!(single_bytes.starts_with(b"%PDF-"));
+
+        let multi = dir.path().join("multi.pdf");
+        handle(
+            Request {
+                operation: "line-chart".into(),
+                input: input.clone(),
+                output: multi.clone(),
+                parameter: r#"{"x":"time","series":["control","treatment"],"title":"Trial","width_mm":210,"height_mm":148}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let multi_bytes = std::fs::read(&multi).unwrap();
+        assert!(multi_bytes.starts_with(b"%PDF-"));
+        assert!(handle(
+            Request {
+                operation: "line-chart".into(),
+                input: input.clone(),
+                output: multi.clone(),
+                parameter: r#"{"x":"time","series":["control","treatment"]}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .is_err());
+        assert_eq!(std::fs::read(&multi).unwrap(), multi_bytes);
+
+        let invalid = dir.path().join("invalid.pdf");
+        assert!(handle(
+            Request {
+                operation: "scatter".into(),
+                input,
+                output: invalid.clone(),
+                parameter: r#"{"x":"time","y":"control","width_mm":10}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .is_err());
+        assert!(!invalid.exists());
     }
 
     #[test]

@@ -23,12 +23,12 @@ No capability is marked device-verified or released. The merged typed-processing
 | full-join | Exact text full outer join; unmatched rows from both sides retained | Linux fixture-tested |
 | run-project | Legacy text replay; typed comparisons, bounded numeric expressions, rename, type-preserving inner join, typed group sum/mean, sort, selection, row windows and Parquet output | Linux schema, null, metadata, join, aggregation and failure fixtures added; hosted verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
-| group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
+| group-summary | Typed CSV/TSV, first-sheet XLSX and supported scalar Parquet keys and numeric columns; missing counts stay distinct; integer counts and floating-point statistics are preserved on Parquet output | Linux regression fixtures passed; hosted checks pending |
 | summary | Numeric column n, missing, mean, sample SD, min/max | implemented-unverified |
 | export | CSV formula guard; Parquet UTF-8 columns | implemented-unverified |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
 | correlation | Pearson coefficient on complete numeric pairs | Linux fixture-tested |
-| line-chart | Monochrome labeled vector lines in table order; legacy and JSON parameters | Linux fixture-tested |
-| scatter | Monochrome labeled scatter SVG, 800 x 600; legacy and JSON parameters | Linux fixture-tested |
+| line-chart | Labeled vector SVG/PDF lines in table order; multi-series palette parameter accepts qualitative batlowS only, with samples at least 3:1 contrast against white and accessible marker/dash styles; Localwright's sequential/diverging maps are not yet exposed by this operation | Linux figure fixtures and PDF export test passed |
+| scatter | Labeled scatter SVG/PDF; multi-series palette parameter accepts qualitative batlowS only, with samples at least 3:1 contrast against white and accessible marker styles; Localwright's sequential/diverging maps are not yet exposed by this operation | Linux figure fixtures and PDF export test passed |
 
 See section 04-07 and 10 of the master specification for complete targets.
