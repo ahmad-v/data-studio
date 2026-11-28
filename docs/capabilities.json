@@ -112,39 +112,39 @@
     },
     {
       "operation": "inner-join",
-      "description": "Type-checked inner join for supported CSV/TSV and flat scalar Parquet inputs; exact-text fallback for other supported formats",
+      "description": "Type-aware join for CSV/TSV, first-sheet XLSX and supported scalar Parquet; exact-text fallback for other formats",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Typed key route and Parquet output regression added; hosted verification pending"
+      "fixture_status": "Existing typed-key and Parquet round-trip fixtures plus shared typed join regression passed locally; hosted source verification pending."
     },
     {
       "operation": "left-join",
-      "description": "Exact-text left outer join preserving unmatched left rows",
+      "description": "Typed left outer join preserving unmatched left rows and null-valued right columns",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux duplicate, unmatched and blank-key fixtures passed"
+      "fixture_status": "Shared typed outer-join fixture passed locally for row count, schema and source preservation; hosted verification pending."
     },
     {
       "operation": "right-join",
-      "description": "Exact-text right outer join preserving unmatched right rows",
+      "description": "Typed right outer join preserving right-row order and unmatched rows; the right key remains omitted for compatibility",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux duplicate, unmatched and blank-key fixtures passed"
+      "fixture_status": "Shared typed outer-join fixture passed locally for row count, null semantics, schema and source preservation; hosted verification pending."
     },
     {
       "operation": "full-join",
-      "description": "Exact-text full outer join preserving unmatched rows from both inputs",
+      "description": "Typed full outer join preserving unmatched rows from both inputs and null keys",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux duplicate, unmatched and blank-key fixtures passed"
+      "fixture_status": "Shared typed outer-join fixture passed locally for unmatched sides, null semantics, schema and source preservation; hosted verification pending."
     },
     {
       "operation": "run-project",
@@ -387,21 +387,21 @@
     },
     {
       "operation": "group-sum",
-      "description": "Grouped sum over finite numeric values in legacy text operations and typed projects",
+      "description": "Typed grouped sum for CSV/TSV, first-sheet XLSX and supported scalar Parquet; legacy text fallback for other inputs",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Route fixtures verify exact text groups; typed project fixtures verify typed keys, null groups, metadata, numeric nulls and overflow handling"
+      "fixture_status": "Standalone and project fixtures verify schema preservation, null handling and source immutability locally; hosted verification pending."
     },
     {
       "operation": "group-mean",
-      "description": "Grouped arithmetic mean over finite numeric values in legacy text operations and typed projects",
+      "description": "Typed grouped mean for CSV/TSV, first-sheet XLSX and supported scalar Parquet; legacy text fallback for other inputs",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Route fixtures verify exact text groups; typed project fixtures verify typed keys, null groups, metadata and all-missing groups"
+      "fixture_status": "Standalone and project fixtures verify schema preservation, null handling and source immutability locally; hosted verification pending."
     },
     {
       "operation": "filter-contains",
