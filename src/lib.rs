@@ -915,7 +915,11 @@ fn export_multi_series_figure(
             Ok(FigureSeries::new(
                 name,
                 data,
-                colors.series_style(index, markers[index % markers.len()], index % 2 == 1)?,
+                colors.series_style_on_white(
+                    index,
+                    markers[index % markers.len()],
+                    index % 2 == 1,
+                )?,
             ))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -3601,8 +3605,16 @@ mod tests {
         assert!(chart.contains("Value"));
         assert!(!chart.contains("<image"));
         let palette = localwright_core::palettes::palette("batlowS").unwrap();
-        assert!(chart.contains(palette.color(0).unwrap()));
-        assert!(chart.contains(palette.color(1).unwrap()));
+        let expected_first = palette
+            .series_style_on_white(0, localwright_core::figure::Marker::Circle, false)
+            .unwrap()
+            .color;
+        let expected_second = palette
+            .series_style_on_white(1, localwright_core::figure::Marker::Square, true)
+            .unwrap()
+            .color;
+        assert!(chart.contains(expected_first));
+        assert!(chart.contains(expected_second));
         assert!(chart.contains("<circle"));
         assert!(chart.contains("stroke-dasharray"));
 
@@ -3622,8 +3634,8 @@ mod tests {
         let scatter_svg = std::fs::read_to_string(scatter).unwrap();
         assert!(scatter_svg.contains("control"));
         assert!(scatter_svg.contains("treatment"));
-        assert!(scatter_svg.contains(palette.color(0).unwrap()));
-        assert!(scatter_svg.contains(palette.color(1).unwrap()));
+        assert!(scatter_svg.contains(expected_first));
+        assert!(scatter_svg.contains(expected_second));
     }
 
     #[test]
