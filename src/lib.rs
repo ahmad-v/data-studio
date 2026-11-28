@@ -35,7 +35,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Version 1 projects keep their original text behavior unless they include `typed_schema`. Version 2 projects use the typed pipeline with inferred columns by default; optional `typed_schema` provides overrides and metadata. Typed projects support schema-aware filters and numeric expressions, typed constant/index columns, atomic multi-column rename and drop, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving missing-value fills. Typed results are saved to a new .parquet file. Join paths are relative to the project file unless absolute."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
- Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
+ Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. CSV, TSV, first-sheet XLSX and supported scalar Parquet use typed keys/values; reports counts, missing values, mean, sample SD and range."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
  Operation{id:"quantiles",label:"Quantiles and IQR",hint:"Parameter: inferred numeric column. CSV, TSV, first-worksheet XLSX and Parquet values use typed columns; nulls are excluded and unsafe integer-to-float conversions are rejected."},
  Operation{id:"standard-error",label:"Standard error",hint:"Parameter: inferred numeric column. CSV, TSV, first-worksheet XLSX and Parquet use typed columns; nulls are excluded."},
@@ -1272,6 +1272,7 @@ fn try_typed_basic_operation(
             | "reverse-rows"
             | "group-sum"
             | "group-mean"
+            | "group-summary"
             | "inner-join"
             | "left-join"
             | "right-join"
@@ -1312,7 +1313,15 @@ fn try_typed_basic_operation(
     } else {
         None
     };
-    let step = if join_request.is_none() {
+    let summary_request = if operation == "group-summary" {
+        let (group, value) = parameter
+            .split_once(',')
+            .ok_or_else(|| Error::input("Expected group-column,value-column"))?;
+        Some((group, value))
+    } else {
+        None
+    };
+    let step = if join_request.is_none() && summary_request.is_none() {
         let Some(step) = request_step(operation, parameter)? else {
             return Ok(None);
         };
@@ -1336,6 +1345,8 @@ fn try_typed_basic_operation(
             _ => join::Kind::Inner,
         };
         table = table.join(right, &options.left_key, &options.right_key, kind, job)?;
+    } else if let Some((group, value)) = summary_request {
+        table = table.group_summary(group, value, job)?;
     } else {
         match step.expect("non-join operations have a parsed typed step") {
             Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
@@ -2159,6 +2170,83 @@ mod tests {
         assert!((sample_sd - 2.0f64.sqrt()).abs() < 1e-12);
         assert_eq!(table.rows[1], ["B", "1", "0", "2", "", "2", "2"]);
         assert_eq!(table.rows[2], ["C", "0", "1", "", "", "", ""]);
+    }
+
+    #[test]
+    fn grouped_summary_exports_typed_counts_and_statistics() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.csv");
+        let output = dir.path().join("summary.parquet");
+        let source = "group,x\nA,1\nA,3\nB,2\nC,\n";
+        std::fs::write(&input, source).unwrap();
+        let outcome = handle(
+            Request {
+                operation: "group-summary".into(),
+                parameter: "group,x".into(),
+                input: input.clone(),
+                output: output.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+        assert_eq!(
+            report["headers"],
+            serde_json::json!(["group", "n", "missing", "mean", "sample_sd", "min", "max"])
+        );
+        assert_eq!(report["schema"]["columns"][1]["type"], "int64");
+        assert_eq!(report["schema"]["columns"][2]["type"], "int64");
+        for column in ["mean", "sample_sd", "min", "max"] {
+            let index = report["headers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|header| header == column)
+                .unwrap();
+            assert_eq!(report["schema"]["columns"][index]["type"], "float64");
+        }
+        assert_eq!(std::fs::read_to_string(input).unwrap(), source);
+        assert!(output.is_file());
+    }
+
+    #[test]
+    fn grouped_summary_accepts_typed_xlsx_and_parquet_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("source.xlsx");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/table.xlsx");
+        std::fs::copy(fixture, &input).unwrap();
+        let parquet = dir.path().join("summary.parquet");
+        let first = handle(
+            Request {
+                operation: "group-summary".into(),
+                parameter: "group,x".into(),
+                input,
+                output: parquet.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let first_report: serde_json::Value = serde_json::from_str(&first.preview).unwrap();
+        assert_eq!(first_report["rows"], 2);
+        assert_eq!(first_report["schema"]["columns"][1]["type"], "int64");
+
+        let second = handle(
+            Request {
+                operation: "group-summary".into(),
+                parameter: "group,mean".into(),
+                input: parquet,
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let second_report: serde_json::Value = serde_json::from_str(&second.preview).unwrap();
+        assert_eq!(second_report["rows"], 2);
+        assert_eq!(second_report["schema"]["columns"][1]["type"], "int64");
+        assert_eq!(second_report["preview"][0][0], "a");
+        assert_eq!(second_report["preview"][0][3], "1");
     }
 
     #[test]

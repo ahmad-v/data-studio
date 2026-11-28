@@ -24,7 +24,7 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | full-join | Typed outer join preserving both unmatched sides, nulls and source schema | Local typed fixture passed; hosted check pending |
 | run-project | Version 1 retains text behavior unless `typed_schema` is supplied; version 2 infers typed columns by default. Typed pipelines preserve Parquet schema, nulls, categories and metadata across comparisons, bounded numeric expressions, rename, inner join, group sum/mean, sorting, selection, row windows and missing-value handling | Tests cover comparisons, expression errors, metadata, schema-preserving rename/join/aggregation, null semantics and failure isolation; v2 inference regression added, hosted verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
-| group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
+| group-summary | Typed CSV/TSV, first-sheet XLSX and supported scalar Parquet keys and numeric columns; missing counts stay distinct; integer counts and floating-point statistics are preserved on Parquet output | Linux regression fixtures passed; hosted checks pending |
 | summary | Numeric column n, missing, mean, sample SD, min/max | Linux fixture-tested |
 | quantiles | R7 quartiles, median and IQR; typed CSV/TSV, first-sheet XLSX and Parquet input excludes nulls and rejects lossy integer conversion | Linux interpolation and typed end-to-end fixtures; local suite passed 2026-11-28 |
 | standard-error | Sample standard error; typed numeric values reject lossy large-integer conversion | Linux sample-SD reference and precision-guard fixtures; local suite passed 2026-11-28 |
