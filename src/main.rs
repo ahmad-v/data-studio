@@ -244,11 +244,15 @@ mod tests {
             .unwrap()
             .expect("typed workspace payload");
         assert!(table.summary.contains("rows 21–22 of 50"));
-        assert!(table.summary.contains("filters applied to all 60 input rows"));
+        assert!(table
+            .summary
+            .contains("filters applied to all 60 input rows"));
         assert!(table
             .summary
             .contains("dataset sorted descending by \"score\" before paging"));
-        assert!(table.summary.contains("header sorting/search applies to this page"));
+        assert!(table
+            .summary
+            .contains("header sorting/search applies to this page"));
     }
 
     #[test]
