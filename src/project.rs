@@ -1,8 +1,8 @@
 use super::{
     apply_step,
     typed::{
-        ColumnMetadata, ColumnType, NumericExpr, SchemaRequest, TextMatch, TypedComparison,
-        TypedTable,
+        ColumnMetadata, ColumnType, NumericExpr, SchemaRequest, StringExpr, TextMatch,
+        TypedComparison, TypedTable,
     },
     Table,
 };
@@ -37,6 +37,14 @@ pub enum Step {
     DeriveNumericColumn {
         name: String,
         expression: NumericExpr,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        unit: Option<String>,
+    },
+    DeriveStringColumn {
+        name: String,
+        expression: StringExpr,
         #[serde(default)]
         label: Option<String>,
         #[serde(default)]
@@ -270,7 +278,13 @@ impl Project {
     /// explicitly declare a typed schema. Version 2 projects use inferred typed
     /// columns by default, with optional overrides and metadata.
     pub(crate) fn typed_schema_request(&self) -> Option<SchemaRequest> {
-        if self.schema_version >= 2 || self.typed_schema.is_some() {
+        if self.schema_version >= 2
+            || self.typed_schema.is_some()
+            || self
+                .steps
+                .iter()
+                .any(|step| matches!(step, Step::DeriveStringColumn { .. }))
+        {
             Some(self.typed_schema.clone().unwrap_or_default())
         } else {
             None
@@ -322,6 +336,17 @@ impl Project {
                             comparison,
                             value,
                         } => table.filter_compare(&column, comparison, &value, job),
+                        Step::DeriveStringColumn {
+                            name,
+                            expression,
+                            label,
+                            unit,
+                        } => table.derive_string_column(
+                            name,
+                            &expression,
+                            ColumnMetadata { label, unit },
+                            job,
+                        ),
                         Step::FilterContains { column, value } => {
                             table.filter_text(&column, &value, TextMatch::Contains, job)
                         }
