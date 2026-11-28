@@ -23,7 +23,7 @@ No capability is marked device-verified or released. The merged typed-processing
 | full-join | Exact text full outer join; unmatched rows from both sides retained | Linux fixture-tested |
 | run-project | Legacy text replay; typed comparisons, bounded numeric expressions, rename, type-preserving inner join, typed group sum/mean, sort, selection, row windows and Parquet output | Linux schema, null, metadata, join, aggregation and failure fixtures added; hosted verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
-| group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
+| group-summary | Typed CSV/TSV, first-sheet XLSX and supported scalar Parquet keys and numeric columns; missing counts stay distinct; integer counts and floating-point statistics are preserved on Parquet output | Linux regression fixtures passed; hosted checks pending |
 | summary | Numeric column n, missing, mean, sample SD, min/max | implemented-unverified |
 | export | CSV formula guard; Parquet UTF-8 columns | implemented-unverified |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
