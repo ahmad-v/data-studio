@@ -1426,12 +1426,16 @@ impl TypedTable {
         Ok(())
     }
 
-    /// Inner join two typed tables using exact type-aware keys; null keys never match.
-    pub(crate) fn inner_join(
+    /// Join typed tables with type-aware keys; null keys never match. Outer
+    /// joins preserve unmatched rows while missing-side columns remain
+    /// explicitly nullable. The right key remains omitted for compatibility
+    /// with the existing join output contract.
+    pub(crate) fn join(
         mut self,
         right: TypedTable,
         left_key: &str,
         right_key: &str,
+        kind: crate::join::Kind,
         job: &Job,
     ) -> Result<Self> {
         let left_index = self.column_index(left_key)?;
@@ -1487,26 +1491,71 @@ impl TypedTable {
             return Err(Error::new(ErrorKind::Limit, "Joined column limit exceeded"));
         }
 
-        let mut index = HashMap::<String, Vec<usize>>::new();
+        let mut right_index = HashMap::<String, Vec<usize>>::new();
         for (row, value) in right_column.values.iter().enumerate() {
             job.check()?;
             if let Some(key) = typed_join_key(right_column, value)? {
-                index.entry(key).or_default().push(row);
+                right_index.entry(key).or_default().push(row);
             }
         }
-        let mut pairs = Vec::new();
+        let mut left_index = HashMap::<String, Vec<usize>>::new();
+        if matches!(kind, crate::join::Kind::Right) {
+            for (row, value) in left_column.values.iter().enumerate() {
+                job.check()?;
+                if let Some(key) = typed_join_key(left_column, value)? {
+                    left_index.entry(key).or_default().push(row);
+                }
+            }
+        }
+
+        let mut pairs = Vec::<(Option<usize>, Option<usize>)>::new();
         let max_rows = MAX_CELLS / names.len();
-        for (left_row, value) in left_column.values.iter().enumerate() {
-            job.check()?;
-            if let Some(key) = typed_join_key(left_column, value)? {
-                if let Some(matches) = index.get(&key) {
-                    if pairs.len().saturating_add(matches.len()) > max_rows {
-                        return Err(Error::new(
-                            ErrorKind::Limit,
-                            "Typed join exceeds the cell limit",
-                        ));
+        let mut matched_right = vec![false; right.rows];
+        let mut append_pair = |left_row, right_row| -> Result<()> {
+            if pairs.len() >= max_rows {
+                return Err(Error::new(
+                    ErrorKind::Limit,
+                    "Typed join exceeds the cell limit",
+                ));
+            }
+            pairs.push((left_row, right_row));
+            Ok(())
+        };
+
+        if matches!(kind, crate::join::Kind::Right) {
+            for (right_row, value) in right_column.values.iter().enumerate() {
+                job.check()?;
+                let matches =
+                    typed_join_key(right_column, value)?.and_then(|key| left_index.get(&key));
+                if let Some(matches) = matches {
+                    for left_row in matches {
+                        append_pair(Some(*left_row), Some(right_row))?;
+                        matched_right[right_row] = true;
                     }
-                    pairs.extend(matches.iter().map(|right_row| (left_row, *right_row)));
+                } else {
+                    append_pair(None, Some(right_row))?;
+                }
+            }
+        } else {
+            for (left_row, value) in left_column.values.iter().enumerate() {
+                job.check()?;
+                let matches =
+                    typed_join_key(left_column, value)?.and_then(|key| right_index.get(&key));
+                if let Some(matches) = matches {
+                    for right_row in matches {
+                        append_pair(Some(left_row), Some(*right_row))?;
+                        matched_right[*right_row] = true;
+                    }
+                } else if matches!(kind, crate::join::Kind::Left | crate::join::Kind::Full) {
+                    append_pair(Some(left_row), None)?;
+                }
+            }
+            if matches!(kind, crate::join::Kind::Full) {
+                for (right_row, matched) in matched_right.iter().enumerate() {
+                    job.check()?;
+                    if !matched {
+                        append_pair(None, Some(right_row))?;
+                    }
                 }
             }
         }
@@ -1522,8 +1571,13 @@ impl TypedTable {
             let mut raw_text = Vec::with_capacity(pairs.len());
             for (left_row, _) in &pairs {
                 job.check()?;
-                values.push(column.values[*left_row].clone());
-                raw_text.push(column.raw_text[*left_row].clone());
+                if let Some(left_row) = left_row {
+                    values.push(column.values[*left_row].clone());
+                    raw_text.push(column.raw_text[*left_row].clone());
+                } else {
+                    values.push(Scalar::Null);
+                    raw_text.push(None);
+                }
             }
             output_columns.push(Column {
                 name: name.clone(),
@@ -1540,8 +1594,13 @@ impl TypedTable {
             let mut raw_text = Vec::with_capacity(pairs.len());
             for (_, right_row) in &pairs {
                 job.check()?;
-                values.push(column.values[*right_row].clone());
-                raw_text.push(column.raw_text[*right_row].clone());
+                if let Some(right_row) = right_row {
+                    values.push(column.values[*right_row].clone());
+                    raw_text.push(column.raw_text[*right_row].clone());
+                } else {
+                    values.push(Scalar::Null);
+                    raw_text.push(None);
+                }
             }
             output_columns.push(Column {
                 name: name.clone(),
@@ -1554,6 +1613,16 @@ impl TypedTable {
             columns: output_columns,
             rows: pairs.len(),
         })
+    }
+
+    pub(crate) fn inner_join(
+        self,
+        right: TypedTable,
+        left_key: &str,
+        right_key: &str,
+        job: &Job,
+    ) -> Result<Self> {
+        self.join(right, left_key, right_key, crate::join::Kind::Inner, job)
     }
 
     /// Aggregate one numeric column by typed key, retaining first-seen group order.
@@ -1690,6 +1759,102 @@ impl TypedTable {
             columns: vec![key_output, aggregate_column],
             rows: groups.len(),
         };
+        Ok(())
+    }
+
+    /// Standalone command form of grouped sum/mean. Keep the established
+    /// `group, n, sum|mean` output shape while using typed keys and values.
+    pub(crate) fn group_numeric_operation(
+        &mut self,
+        group_name: &str,
+        value_name: &str,
+        mean: bool,
+        job: &Job,
+    ) -> Result<()> {
+        let group_index = self.column_index(group_name)?;
+        let value_index = self.column_index(value_name)?;
+        let group_column = &self.columns[group_index];
+        let value_column = &self.columns[value_index];
+        if !matches!(
+            value_column.kind,
+            ColumnType::Int64 | ColumnType::UInt64 | ColumnType::Float64
+        ) {
+            return Err(Error::input(format!(
+                "Aggregation column {value_name:?} must have a numeric type"
+            )));
+        }
+        let aggregate_name = if mean { "mean" } else { "sum" };
+        if [group_name, "n", aggregate_name]
+            .iter()
+            .enumerate()
+            .any(|(index, name)| {
+                [group_name, "n", aggregate_name]
+                    .iter()
+                    .skip(index + 1)
+                    .any(|other| name == other)
+            })
+        {
+            return Err(Error::input(
+                "Group aggregation output names conflict with the group column",
+            ));
+        }
+
+        let mut counts = HashMap::<String, i64>::new();
+        for row in 0..self.rows {
+            job.check()?;
+            if scalar_to_f64(value_column, &value_column.values[row])?.is_some() {
+                let key = typed_join_key(group_column, &group_column.values[row])?
+                    .unwrap_or_else(|| "n:".into());
+                let count = counts.entry(key).or_default();
+                *count = count.checked_add(1).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Limit,
+                        "Grouped value count exceeds the supported range",
+                    )
+                })?;
+            }
+        }
+
+        self.group_numeric(group_name, value_name, mean, job)?;
+        let group = self.columns[0].clone();
+        let mut order = (0..self.rows).collect::<Vec<_>>();
+        order.sort_by(|left, right| {
+            let label = |row: usize| {
+                scalar_text(
+                    &group.values[row],
+                    &group.categories,
+                    group.raw_text[row].as_deref(),
+                )
+            };
+            label(*left).cmp(&label(*right))
+        });
+        self.reorder_rows(&order, job)?;
+
+        let group = self.columns[0].clone();
+        let mut aggregate = self.columns[1].clone();
+        let counts = group
+            .values
+            .iter()
+            .map(|value| {
+                let key = typed_join_key(&group, value)?.unwrap_or_else(|| "n:".into());
+                Ok(Scalar::Int64(*counts.get(&key).unwrap_or(&0)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let count_column = Column {
+            name: "n".into(),
+            kind: ColumnType::Int64,
+            values: counts,
+            raw_text: vec![None; self.rows],
+            categories: Vec::new(),
+            metadata: ColumnMetadata {
+                label: Some("n".into()),
+                unit: None,
+            },
+        };
+        aggregate.name = aggregate_name.into();
+        aggregate.metadata.label = Some(aggregate_name.into());
+        validate_metadata(&aggregate.metadata)?;
+        self.columns = vec![group, count_column, aggregate];
         Ok(())
     }
 
