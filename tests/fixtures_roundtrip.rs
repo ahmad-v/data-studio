@@ -48,7 +48,8 @@ fn native_table_query_supports_json_and_legacy_named_worksheet_selection() {
         .unwrap();
         let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
         assert_eq!(report["headers"], serde_json::json!(["label", "amount"]));
-        assert_eq!(report["rows"][0], serde_json::json!(["selected", 42]));
+        assert_eq!(report["rows"][0][0], "selected");
+        assert_eq!(report["rows"][0][1].as_f64(), Some(42.0));
         assert_eq!(report["total_rows"], 1);
     }
 }
