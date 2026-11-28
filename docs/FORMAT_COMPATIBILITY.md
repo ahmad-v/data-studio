@@ -28,7 +28,7 @@ No capability is marked device-verified or released. The merged typed-processing
 | export | CSV formula guard; Parquet UTF-8 columns | implemented-unverified |
 | linear-regression | Ordinary least squares with intercept and complete numeric pairs | Linux fixture and CLI-tested |
 | correlation | Pearson coefficient on complete numeric pairs | Linux fixture-tested |
-| line-chart | Labeled vector SVG/PDF lines in table order; palette samples have at least 3:1 contrast against white, with accessible marker and dash styles; legacy and JSON parameters; multi-series support | Linux figure fixtures and PDF export test passed |
-| scatter | Labeled scatter SVG/PDF; palette samples have at least 3:1 contrast against white, with accessible marker styles; legacy and JSON parameters; multi-series support | Linux figure fixtures and PDF export test passed |
+| line-chart | Labeled vector SVG/PDF lines in table order; multi-series palette parameter accepts qualitative batlowS only, with samples at least 3:1 contrast against white and accessible marker/dash styles; Localwright's sequential/diverging maps are not yet exposed by this operation | Linux figure fixtures and PDF export test passed |
+| scatter | Labeled scatter SVG/PDF; multi-series palette parameter accepts qualitative batlowS only, with samples at least 3:1 contrast against white and accessible marker styles; Localwright's sequential/diverging maps are not yet exposed by this operation | Linux figure fixtures and PDF export test passed |
 
 See section 04-07 and 10 of the master specification for complete targets.

@@ -14,7 +14,7 @@ This independent studio uses Localwright at source level. There is no separate m
 - Exact-match filter over delimited text or supported scalar Parquet converted to text (implemented-unverified).
 - Numeric column n, missing, mean, sample SD, min/max (implemented-unverified).
 - CSV formula guard; Parquet UTF-8 columns (implemented-unverified).
-- Monochrome single-series and palette-aware multi-series scientific line and scatter figures as SVG or vector PDF, with legends, marker/dash differentiation, visible titles and axis labels; multi-series colors are selected from licensed palette samples with at least 3:1 contrast against the white plotting background. Existing `x,y` parameters remain supported. PDF exports accept `width_mm` and `height_mm` in JSON and default to 210 × 148 mm. Host font availability affects label outlines; generated plots are not rasterized.
+- Scientific line and scatter figures export SVG or vector PDF with titles, axis labels and legends. Multi-series figures use accessible marker/dash styles and the `batlowS` qualitative palette. The pinned Localwright core also bundles sequential `batlow`, `viridis`, `cividis`, `plasma`, `inferno`, `magma` and diverging `vik` maps; Data Studio's current chart renderer does not yet expose those sequential/diverging maps. See the manual for palette names, attribution and the current selection limit. PDF exports accept `width_mm` and `height_mm` in JSON and default to 210 × 148 mm. Host font availability affects label outlines; generated plots are not rasterized.
 
 The project is intended to remain free, local and offline, without tracking, advertising, subscriptions or premium features. See [the manifesto](MANIFESTO.md) for the motivation behind it.
 
