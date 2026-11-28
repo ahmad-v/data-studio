@@ -68,6 +68,15 @@
       "fixture_status": "Typed inference and user-route fixtures passed in the Linux test suite; CSV/TSV typed routes decode directly into columnar values without the legacy row-string table; hosted native matrix pending"
     },
     {
+      "operation": "inspect-table",
+      "description": "Native typed table page with up to eight dataset-wide typed filters, stable ascending/descending sort before paging, schema metadata, and explicit page offset/size; input remains bounded in-memory",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Tests added for filtered and sorted page boundaries, null-last descending sort, bounded page requests and the native route; hosted Check and Integration pending"
+    },
+    {
       "operation": "export-typed-parquet",
       "description": "Write typed Arrow/Parquet scalar columns, categorical dictionaries, nulls, labels and units from validated inferred or explicit schema",
       "status": "implemented-unverified",
