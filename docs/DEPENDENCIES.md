@@ -8,7 +8,7 @@ Ordinary checks run on Linux x64 and skip Cargo work for Markdown-only changes w
 
 The distribution workflow creates unsigned development previews, not installers. `packaging/config.json` still marks application identity unapproved and maintainer unset; the package script also explicitly blocks Windows EXE, Linux AppImage, and Flatpak pending reviewed packaging tools and source/runtime inputs. These unsupported combinations are not presented as successful package builds.
 
-The XLSX and Parquet stack uses Calamine 0.38.0, ZIP 9.0.5 and Arrow/Parquet 57.3.3. These pins address advisories in the previous lock candidates for Calamine, ZIP, Quick-XML, Arrow Data and Thrift. The updated spreadsheet stack requires Rust 1.88.
+The XLSX and Parquet stack uses Calamine 0.38.0, ZIP 9.0.5, Quick-XML 0.42.0 and Arrow/Parquet 57.3.3. These pins address advisories in the previous lock candidates for Calamine, ZIP, Quick-XML, Arrow Data and Thrift. Quick-XML is a direct dependency because Data Studio validates worksheet dimensions and cell references before Calamine can allocate a worksheet range. The updated spreadsheet stack requires Rust 1.88.
 
 The typed-Parquet route adds `arrow-cast 57.3.3` as a direct dependency; it was already in the locked graph through Arrow/Parquet, so this did not add a new package version. RustSec audit of the updated lockfile reported no vulnerabilities. It did report eight unmaintained-dependency advisories with no fixed versions available at this review: `chrono 0.4.45`, `instant 0.1.13`, `paste 1.0.15`, `pin-utils 0.1.1`, `rustybuzz 0.14.1`, and `ttf-parser` 0.20.0, 0.21.1 and 0.25.1. These arrive through Arrow/Parquet and the pinned Iced font/toolkit graph; continue tracking them during dependency review.
 

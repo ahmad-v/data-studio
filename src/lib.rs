@@ -5,6 +5,7 @@ mod sql;
 mod statistics;
 mod transform;
 mod typed;
+mod xlsx_safety;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx};
@@ -291,22 +292,7 @@ fn load(p: &Path, sheet: Option<&str>, j: &Job) -> Result<Table> {
             validate(headers, rows)
         }
         Some("xlsx") => {
-            let mut zip = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).map_err(err)?;
-            if zip.len() > 4096 {
-                return Err(Error::input("Workbook archive member limit exceeded"));
-            }
-            let mut total = 0u64;
-            for i in 0..zip.len() {
-                j.check()?;
-                let entry = zip.by_index(i).map_err(err)?;
-                total = total
-                    .checked_add(entry.size())
-                    .ok_or_else(|| Error::input("Workbook expansion overflow"))?;
-                if total > 64 * 1024 * 1024 || entry.size() > 32 * 1024 * 1024 {
-                    return Err(Error::input("Workbook declared expansion limit exceeded"));
-                }
-            }
-            drop(zip);
+            xlsx_safety::validate_workbook(&bytes, j)?;
             let mut book: Xlsx<_> =
                 calamine::open_workbook_from_rs(Cursor::new(bytes)).map_err(err)?;
             let names = book.sheet_names();

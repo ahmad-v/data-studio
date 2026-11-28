@@ -761,25 +761,7 @@ impl TypedTable {
 
         let bytes = read_bounded(path, MAX_BYTES)?;
         job.check()?;
-        let mut zip = zip::ZipArchive::new(Cursor::new(bytes.as_slice()))
-            .map_err(|error| Error::input(error.to_string()))?;
-        if zip.len() > 4096 {
-            return Err(Error::input("Workbook archive member limit exceeded"));
-        }
-        let mut total = 0u64;
-        for index in 0..zip.len() {
-            job.check()?;
-            let entry = zip
-                .by_index(index)
-                .map_err(|error| Error::input(error.to_string()))?;
-            total = total
-                .checked_add(entry.size())
-                .ok_or_else(|| Error::input("Workbook expansion overflow"))?;
-            if total > 64 * 1024 * 1024 || entry.size() > 32 * 1024 * 1024 {
-                return Err(Error::input("Workbook declared expansion limit exceeded"));
-            }
-        }
-        drop(zip);
+        super::xlsx_safety::validate_workbook(&bytes, job)?;
 
         let mut workbook: Xlsx<_> =
             calamine::open_workbook_from_rs::<Xlsx<_>, _>(Cursor::new(bytes))

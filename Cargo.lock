@@ -894,6 +894,7 @@ dependencies = [
  "localwright-core",
  "localwright-ui",
  "parquet",
+ "quick-xml 0.42.0",
  "rusqlite",
  "serde",
  "serde_json",
