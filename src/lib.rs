@@ -2211,6 +2211,45 @@ mod tests {
     }
 
     #[test]
+    fn grouped_summary_accepts_typed_xlsx_and_parquet_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("source.xlsx");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/table.xlsx");
+        std::fs::copy(fixture, &input).unwrap();
+        let parquet = dir.path().join("summary.parquet");
+        let first = handle(
+            Request {
+                operation: "group-summary".into(),
+                parameter: "group,x".into(),
+                input,
+                output: parquet.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let first_report: serde_json::Value = serde_json::from_str(&first.preview).unwrap();
+        assert_eq!(first_report["rows"], 2);
+        assert_eq!(first_report["schema"]["columns"][1]["type"], "int64");
+
+        let second = handle(
+            Request {
+                operation: "group-summary".into(),
+                parameter: "group,mean".into(),
+                input: parquet,
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let second_report: serde_json::Value = serde_json::from_str(&second.preview).unwrap();
+        assert_eq!(second_report["rows"], 2);
+        assert_eq!(second_report["schema"]["columns"][1]["type"], "int64");
+        assert_eq!(second_report["preview"][0][0], "a");
+        assert_eq!(second_report["preview"][0][3], "1");
+    }
+
+    #[test]
     fn ten_statistical_routes_return_reports_and_preserve_no_overwrite() {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("measurements.csv");
