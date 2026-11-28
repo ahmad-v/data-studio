@@ -485,6 +485,15 @@
       "fixture_status": "Added categorical mapping, null/metadata preservation, standalone typed-route and typed-project regression tests; hosted verification pending"
     },
     {
+      "operation": "derive-string-column",
+      "description": "Compose bounded null-aware expressions over String/Categorical columns into a new typed String column without changing source data",
+      "status": "implemented-unverified",
+      "targets": [
+        "x86_64-unknown-linux-gnu"
+      ],
+      "fixture_status": "Unit regression covers composition, null-aware concat/coalesce, type rejection and expansion limits; standalone Parquet and version 1 project-route fixtures added; hosted verification pending"
+    },
+    {
       "operation": "rename-columns",
       "description": "Atomically rename multiple table columns while preserving types for typed supported file inputs and version 2 projects",
       "status": "implemented-unverified",

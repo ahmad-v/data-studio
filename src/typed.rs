@@ -24,6 +24,10 @@ const MAX_WORKSPACE_QUERY_BYTES: usize = 16 * 1024;
 const MAX_WORKSPACE_QUERY_FILTERS: usize = 8;
 const MAX_WORKSPACE_PAGE_ROWS: usize = 100;
 const MAX_TYPED_TRANSFORM_TEXT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_STRING_EXPRESSION_NODES: usize = 128;
+const MAX_STRING_EXPRESSION_DEPTH: usize = 16;
+const MAX_STRING_EXPRESSION_LITERAL_BYTES: usize = 16 * 1024;
+const MAX_STRING_EXPRESSION_CELL_BYTES: usize = 1024 * 1024;
 
 /// Physical type selected for a column in a typed table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,6 +228,42 @@ pub(crate) enum NumericExpr {
         value: Box<Self>,
         minimum: f64,
         maximum: f64,
+    },
+}
+
+/// Bounded string expression for typed pipelines. Null input semantics are
+/// explicit: concatenation propagates nulls, while `coalesce` skips them.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum StringExpr {
+    Literal {
+        value: String,
+    },
+    Column {
+        name: String,
+    },
+    Concat {
+        values: Vec<Self>,
+    },
+    Coalesce {
+        values: Vec<Self>,
+    },
+    Trim {
+        value: Box<Self>,
+    },
+    Lower {
+        value: Box<Self>,
+    },
+    Upper {
+        value: Box<Self>,
+    },
+    CollapseWhitespace {
+        value: Box<Self>,
+    },
+    ReplaceLiteral {
+        value: Box<Self>,
+        find: String,
+        replace: String,
     },
 }
 
@@ -793,6 +833,207 @@ fn evaluate_numeric_expression(
         } => evaluate_numeric_unary(value, table, row, |value| {
             Ok(value.clamp(*minimum, *maximum))
         }),
+    }
+}
+
+fn validate_string_expression(
+    expression: &StringExpr,
+    table: &TypedTable,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<()> {
+    *nodes = nodes
+        .checked_add(1)
+        .filter(|count| *count <= MAX_STRING_EXPRESSION_NODES)
+        .ok_or_else(|| Error::input("String expression exceeds the 128-node limit"))?;
+    if depth > MAX_STRING_EXPRESSION_DEPTH {
+        return Err(Error::input(
+            "String expression exceeds the 16-level depth limit",
+        ));
+    }
+    match expression {
+        StringExpr::Literal { value } => {
+            if value.len() > MAX_STRING_EXPRESSION_LITERAL_BYTES {
+                return Err(Error::input("String expression literal exceeds 16 KiB"));
+            }
+        }
+        StringExpr::Column { name } => {
+            let index = table.column_index(name)?;
+            if !matches!(
+                table.columns[index].kind,
+                ColumnType::String | ColumnType::Categorical
+            ) {
+                return Err(Error::input(format!(
+                    "String expression column {name:?} must be String or Categorical"
+                )));
+            }
+        }
+        StringExpr::Concat { values } | StringExpr::Coalesce { values } => {
+            if !(2..=32).contains(&values.len()) {
+                return Err(Error::input(
+                    "String expression concat/coalesce requires 2–32 operands",
+                ));
+            }
+            for value in values {
+                validate_string_expression(value, table, depth + 1, nodes)?;
+            }
+        }
+        StringExpr::Trim { value }
+        | StringExpr::Lower { value }
+        | StringExpr::Upper { value }
+        | StringExpr::CollapseWhitespace { value } => {
+            validate_string_expression(value, table, depth + 1, nodes)?;
+        }
+        StringExpr::ReplaceLiteral {
+            value,
+            find,
+            replace,
+        } => {
+            if find.is_empty()
+                || find.chars().count() > 1024
+                || replace.len() > MAX_STRING_EXPRESSION_LITERAL_BYTES
+            {
+                return Err(Error::input(
+                    "String replacement needs a nonempty search (up to 1,024 characters) and replacement up to 16 KiB",
+                ));
+            }
+            validate_string_expression(value, table, depth + 1, nodes)?;
+        }
+    }
+    Ok(())
+}
+
+fn evaluate_string_expression(
+    expression: &StringExpr,
+    table: &TypedTable,
+    row: usize,
+    byte_limit: usize,
+) -> Result<Option<String>> {
+    let checked = |value: String| {
+        if value.len() <= byte_limit {
+            Ok(Some(value))
+        } else {
+            Err(Error::new(
+                ErrorKind::Limit,
+                "String expression cell exceeds the 1 MiB limit",
+            ))
+        }
+    };
+    match expression {
+        StringExpr::Literal { value } => checked(value.clone()),
+        StringExpr::Column { name } => {
+            let index = table.column_index(name)?;
+            let column = &table.columns[index];
+            match &column.values[row] {
+                Scalar::Null => Ok(None),
+                Scalar::String(value) => {
+                    let text = column.raw_text[row].as_deref().unwrap_or(value);
+                    if text.len() > byte_limit {
+                        Err(Error::new(
+                            ErrorKind::Limit,
+                            "String expression source cell exceeds the 1 MiB limit",
+                        ))
+                    } else {
+                        Ok(Some(text.to_owned()))
+                    }
+                }
+                Scalar::Categorical(index) => {
+                    let text = column.categories.get(*index as usize).ok_or_else(|| {
+                        Error::input("Categorical expression index is outside its dictionary")
+                    })?;
+                    if text.len() > byte_limit {
+                        Err(Error::new(
+                            ErrorKind::Limit,
+                            "String expression source cell exceeds the 1 MiB limit",
+                        ))
+                    } else {
+                        Ok(Some(text.clone()))
+                    }
+                }
+                _ => Err(Error::input(
+                    "String expression encountered a non-text scalar",
+                )),
+            }
+        }
+        StringExpr::Concat { values } => {
+            let mut output = String::new();
+            for expression in values {
+                let Some(value) = evaluate_string_expression(expression, table, row, byte_limit)?
+                else {
+                    return Ok(None);
+                };
+                let size = output
+                    .len()
+                    .checked_add(value.len())
+                    .filter(|size| *size <= byte_limit)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::Limit,
+                            "String expression cell exceeds the 1 MiB limit",
+                        )
+                    })?;
+                output.reserve(size.saturating_sub(output.len()));
+                output.push_str(&value);
+            }
+            Ok(Some(output))
+        }
+        StringExpr::Coalesce { values } => {
+            for expression in values {
+                if let Some(value) = evaluate_string_expression(expression, table, row, byte_limit)?
+                {
+                    return Ok(Some(value));
+                }
+            }
+            Ok(None)
+        }
+        StringExpr::Trim { value } => evaluate_string_expression(value, table, row, byte_limit)?
+            .map(|value| checked(value.trim().to_owned()))
+            .transpose()
+            .map(Option::flatten),
+        StringExpr::Lower { value } => evaluate_string_expression(value, table, row, byte_limit)?
+            .map(|value| checked(value.to_lowercase()))
+            .transpose()
+            .map(Option::flatten),
+        StringExpr::Upper { value } => evaluate_string_expression(value, table, row, byte_limit)?
+            .map(|value| checked(value.to_uppercase()))
+            .transpose()
+            .map(Option::flatten),
+        StringExpr::CollapseWhitespace { value } => {
+            evaluate_string_expression(value, table, row, byte_limit)?
+                .map(|value| checked(value.split_whitespace().collect::<Vec<_>>().join(" ")))
+                .transpose()
+                .map(Option::flatten)
+        }
+        StringExpr::ReplaceLiteral {
+            value,
+            find,
+            replace,
+        } => evaluate_string_expression(value, table, row, byte_limit)?
+            .map(|value| {
+                let occurrences = value.matches(find).count();
+                let removed = find.len().checked_mul(occurrences).ok_or_else(|| {
+                    Error::new(ErrorKind::Limit, "String replacement size overflow")
+                })?;
+                let added = replace.len().checked_mul(occurrences).ok_or_else(|| {
+                    Error::new(ErrorKind::Limit, "String replacement size overflow")
+                })?;
+                let size = value
+                    .len()
+                    .checked_sub(removed)
+                    .and_then(|size| size.checked_add(added))
+                    .filter(|size| *size <= byte_limit)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::Limit,
+                            "String expression cell exceeds the 1 MiB limit",
+                        )
+                    })?;
+                let mut output = String::with_capacity(size);
+                output.push_str(&value.replace(find, replace));
+                Ok(Some(output))
+            })
+            .transpose()
+            .map(Option::flatten),
     }
 }
 
@@ -1607,6 +1848,71 @@ impl TypedTable {
         self.columns.push(Column {
             name,
             kind: ColumnType::Float64,
+            values,
+            raw_text: vec![None; self.rows],
+            categories: Vec::new(),
+            metadata,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn derive_string_column(
+        &mut self,
+        name: String,
+        expression: &StringExpr,
+        metadata: ColumnMetadata,
+        job: &Job,
+    ) -> Result<()> {
+        validate_column_name(&name)?;
+        if self.columns.iter().any(|column| column.name == name) {
+            return Err(Error::input("Derived column name must be unique"));
+        }
+        if self.columns.len() >= MAX_COLS
+            || self
+                .rows
+                .saturating_mul(self.columns.len().saturating_add(1))
+                > MAX_CELLS
+        {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Derived column would exceed the typed table limits",
+            ));
+        }
+        validate_metadata(&metadata)?;
+        let mut nodes = 0;
+        validate_string_expression(expression, self, 1, &mut nodes)?;
+        let mut values = Vec::with_capacity(self.rows);
+        let mut total_bytes = 0usize;
+        for row in 0..self.rows {
+            job.check()?;
+            let value =
+                evaluate_string_expression(expression, self, row, MAX_STRING_EXPRESSION_CELL_BYTES)
+                    .map_err(|error| {
+                        Error::new(
+                            error.kind,
+                            format!(
+                                "String expression failed on row {}: {}",
+                                row + 1,
+                                error.message
+                            ),
+                        )
+                    })?;
+            if let Some(text) = &value {
+                total_bytes = total_bytes
+                    .checked_add(text.len())
+                    .filter(|size| *size <= MAX_TYPED_TRANSFORM_TEXT_BYTES)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorKind::Limit,
+                            "String expression result exceeds the 32 MiB text limit",
+                        )
+                    })?;
+            }
+            values.push(value.map_or(Scalar::Null, Scalar::String));
+        }
+        self.columns.push(Column {
+            name,
+            kind: ColumnType::String,
             values,
             raw_text: vec![None; self.rows],
             categories: Vec::new(),
@@ -3637,6 +3943,94 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn string_expressions_compose_and_bound_expansion() {
+        let source = table(
+            vec!["name", "site", "count"],
+            vec![vec!["  Ada  ", " lab ", "1"], vec!["Grace", "", "2"]],
+        );
+        let mut typed = TypedTable::infer(&source, SchemaRequest::default(), &Job::new()).unwrap();
+        let expression: StringExpr = serde_json::from_value(json!({
+            "op": "concat",
+            "values": [
+                {"op": "trim", "value": {"op": "column", "name": "name"}},
+                {"op": "literal", "value": " / "},
+                {"op": "coalesce", "values": [
+                    {"op": "upper", "value": {"op": "trim", "value": {"op": "column", "name": "site"}}},
+                    {"op": "literal", "value": "Unknown"}
+                ]}
+            ]
+        }))
+        .unwrap();
+        typed
+            .derive_string_column(
+                "display".into(),
+                &expression,
+                ColumnMetadata::default(),
+                &Job::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            typed.columns[3].values[0],
+            Scalar::String("Ada / LAB".into())
+        );
+        assert_eq!(
+            typed.columns[3].values[1],
+            Scalar::String("Grace / Unknown".into())
+        );
+        let mut nodes = 0;
+        assert!(validate_string_expression(
+            &StringExpr::Column {
+                name: "count".into()
+            },
+            &typed,
+            1,
+            &mut nodes
+        )
+        .is_err());
+        let null_concat: StringExpr = serde_json::from_value(json!({
+            "op": "concat",
+            "values": [
+                {"op": "column", "name": "site"},
+                {"op": "literal", "value": "suffix"}
+            ]
+        }))
+        .unwrap();
+        typed
+            .derive_string_column(
+                "with_suffix".into(),
+                &null_concat,
+                ColumnMetadata::default(),
+                &Job::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            typed.columns[4].values[0],
+            Scalar::String(" lab suffix".into())
+        );
+        assert_eq!(typed.columns[4].values[1], Scalar::Null);
+
+        let large = table(vec!["text"], vec![vec![&"a".repeat(100_000)]]);
+        let mut large = TypedTable::infer(&large, SchemaRequest::default(), &Job::new()).unwrap();
+        let expansion = StringExpr::ReplaceLiteral {
+            value: Box::new(StringExpr::Column {
+                name: "text".into(),
+            }),
+            find: "a".into(),
+            replace: "x".repeat(20),
+        };
+        let error = large
+            .derive_string_column(
+                "expanded".into(),
+                &expansion,
+                ColumnMetadata::default(),
+                &Job::new(),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Limit);
+        assert_eq!(large.columns.len(), 1);
     }
 
     #[test]

@@ -33,7 +33,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs preserve inferred types in previews and Parquet output; CSV/TSV output serializes nulls as empty fields."},
- Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Version 1 projects keep their original text behavior unless they include `typed_schema`. Version 2 projects use the typed pipeline with inferred columns by default; optional `typed_schema` provides overrides and metadata. Typed projects support schema-aware filters and numeric expressions, string/categorical `normalize-text` and `replace-literal`, typed constant/index columns, atomic multi-column rename and drop, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving missing-value fills. Typed results are saved to a new .parquet file. Join paths are relative to the project file unless absolute."#},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Version 1 projects keep their original text behavior unless they include `typed_schema` or use `derive-string-column`. Version 2 projects use the typed pipeline with inferred columns by default; optional `typed_schema` provides overrides and metadata. Typed projects support schema-aware filters and numeric expressions, string/categorical `normalize-text`, `replace-literal` and reusable `derive-string-column` expressions, typed constant/index columns, atomic multi-column rename and drop, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving missing-value fills. Typed results are saved to a new .parquet file. Join paths are relative to the project file unless absolute."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. CSV, TSV, first-sheet XLSX and supported scalar Parquet use typed keys/values; reports counts, missing values, mean, sample SD and range."},
@@ -88,6 +88,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"round-numeric-column",label:"Round numeric column",hint:r#"Parameter JSON: {"column":"amount","name":"rounded","decimal_places":2}. Precision must be from -12 to 12; blanks remain blank."#},
  Operation{id:"clip-numeric-column",label:"Clip numeric column",hint:r#"Parameter JSON: {"column":"score","name":"bounded","minimum":0,"maximum":100}. Bounds are inclusive, finite, and ordered."#},
  Operation{id:"replace-literal",label:"Replace literal text",hint:r#"Parameter JSON: {"column":"notes","find":"old","replace":"new"}. Replaces all non-overlapping literal matches in one column."#},
+ Operation{id:"derive-string-column",label:"Derive string column",hint:r#"Typed expression JSON: {"name":"label","expression":{"op":"concat","values":[{"op":"column","name":"group"},{"op":"literal","value":" / "},{"op":"upper","value":{"op":"column","name":"site"}}]}}. Supports null-aware concat/coalesce, trim, Unicode case conversion, whitespace collapse and bounded literal replacement on String/Categorical columns. New output name; source columns are unchanged."#},
  Operation{id:"drop-rows-any-missing",label:"Drop rows with any missing cells",hint:"Removes a row when any cell is blank or whitespace-only."},
  Operation{id:"fill-forward",label:"Fill forward",hint:r#"Parameter JSON: {"column":"group"}. Fills blank cells from the nearest preceding nonblank value; leading blanks remain blank."#},
  Operation{id:"fill-backward",label:"Fill backward",hint:r#"Parameter JSON: {"column":"group"}. Fills blank cells from the nearest following nonblank value; trailing blanks remain blank."#},
@@ -424,6 +425,7 @@ fn apply_step(mut table: Table, step: Step, job: &Job) -> Result<Table> {
         | Step::DropEmptyColumns { .. }
         | Step::ReverseRows { .. }) => return transform::apply(table, step, job),
         Step::FilterCompare { .. }
+        | Step::DeriveStringColumn { .. }
         | Step::DeriveNumericColumn { .. }
         | Step::TypedInnerJoin { .. } => {
             return Err(Error::input(
@@ -562,6 +564,7 @@ fn request_step(operation: &str, parameter: &str) -> Result<Option<Step>> {
             | "round-numeric-column"
             | "clip-numeric-column"
             | "replace-literal"
+            | "derive-string-column"
             | "fill-forward"
             | "fill-backward"
     ) {
@@ -1274,6 +1277,7 @@ fn try_typed_basic_operation(
             | "filter-ends-with"
             | "normalize-text"
             | "replace-literal"
+            | "derive-string-column"
             | "deduplicate"
             | "drop-duplicates-by-columns"
             | "sort"
@@ -1402,6 +1406,17 @@ fn try_typed_basic_operation(
                 }
                 table.replace_literal_text(&column, &find, &replace, job)?;
             }
+            Step::DeriveStringColumn {
+                name,
+                expression,
+                label,
+                unit,
+            } => table.derive_string_column(
+                name,
+                &expression,
+                typed::ColumnMetadata { label, unit },
+                job,
+            )?,
             Step::Deduplicate {} => table.deduplicate_rows(None, job)?,
             Step::DropDuplicatesByColumns { columns } => {
                 table.deduplicate_rows(Some(&columns), job)?
@@ -1734,7 +1749,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 preview: preview.chars().take(24000).collect(),
                 written,
                 warnings: vec![format!(
-                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed group-sum/group-mean preserve key type and metadata, group null keys together, omit null values and return null for all-missing groups. Missing-value fills parse replacements against the existing column type and preserve source spellings in previews. Typed pipelines support filter, filter-compare, normalize-text, replace-literal, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, fill-missing, fill-forward, fill-backward, drop-rows-any-missing, head-rows, tail-rows and reverse-rows. Joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
+                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. String expressions compose bounded literals, text columns, concatenation, coalescing, trimming, Unicode case changes, whitespace collapse and literal replacement; concatenation propagates nulls and coalesce skips nulls. Typed group-sum/group-mean preserve key type and metadata, group null keys together, omit null values and return null for all-missing groups. Missing-value fills parse replacements against the existing column type and preserve source spellings in previews. Typed pipelines support filter, filter-compare, normalize-text, replace-literal, derive-string-column, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, fill-missing, fill-forward, fill-backward, drop-rows-any-missing, head-rows, tail-rows and reverse-rows. Joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
                 )],
                 ..Outcome::default()
             });
@@ -2939,6 +2954,72 @@ mod tests {
         .unwrap();
         assert!(fallback.warnings[0].contains("Transformation operations still use text cells"));
         assert_eq!(std::fs::read_to_string(legacy_output).unwrap(), original);
+    }
+
+    #[test]
+    fn derived_string_expression_is_available_standalone_and_in_legacy_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("source.csv");
+        let output = dir.path().join("derived.parquet");
+        let project = dir.path().join("project.json");
+        let project_output = dir.path().join("project-derived.parquet");
+        let original = "name,site,count\n  Ada  , lab ,1\nGrace,,2\n";
+        std::fs::write(&input, original).unwrap();
+        let parameter = r#"{"name":"display","expression":{"op":"concat","values":[{"op":"trim","value":{"op":"column","name":"name"}},{"op":"literal","value":" / "},{"op":"coalesce","values":[{"op":"upper","value":{"op":"trim","value":{"op":"column","name":"site"}}},{"op":"literal","value":"Unknown"}]}]}}"#;
+        let outcome = handle(
+            Request {
+                operation: "derive-string-column".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: parameter.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(outcome.written.as_deref(), Some(output.as_path()));
+        let typed = typed::TypedTable::from_path(
+            &output,
+            None,
+            typed::SchemaRequest::default(),
+            &Job::new(),
+        )
+        .unwrap();
+        assert_eq!(typed.schema_report()["columns"][3]["type"], "string");
+        assert_eq!(typed.preview_report()["preview"][0][3], "Ada / LAB");
+        assert_eq!(typed.preview_report()["preview"][1][3], "Grace / Unknown");
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+
+        std::fs::write(
+            &project,
+            format!(
+                r#"{{"schema_version":1,"steps":[{{"operation":"derive-string-column","name":"display","expression":{}}}]}}"#,
+                serde_json::from_str::<serde_json::Value>(parameter)
+                    .unwrap()["expression"]
+            ),
+        )
+        .unwrap();
+        let outcome = handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: project_output.clone(),
+                parameter: project.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(outcome.written.as_deref(), Some(project_output.as_path()));
+        let typed = typed::TypedTable::from_path(
+            &project_output,
+            None,
+            typed::SchemaRequest::default(),
+            &Job::new(),
+        )
+        .unwrap();
+        assert_eq!(typed.preview_report()["preview"][0][3], "Ada / LAB");
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
     }
 
     #[test]
