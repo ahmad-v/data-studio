@@ -7,7 +7,7 @@
 use crate::MAX_CELLS;
 use localwright_core::{Error, Job, Result};
 use quick_xml::{events::Event, Reader};
-use std::io::{Cursor, Read};
+use std::io::{self, Cursor, Read};
 use zip::ZipArchive;
 
 const MAX_ARCHIVE_MEMBERS: usize = 4096;
@@ -27,7 +27,6 @@ pub(crate) fn validate_workbook(bytes: &[u8], job: &Job) -> Result<()> {
     }
 
     let mut total_declared = 0u64;
-    let mut worksheet_indices = Vec::new();
     for index in 0..archive.len() {
         job.check()?;
         let entry = archive
@@ -39,31 +38,55 @@ pub(crate) fn validate_workbook(bytes: &[u8], job: &Job) -> Result<()> {
         if total_declared > MAX_ARCHIVE_EXPANSION || entry.size() > MAX_MEMBER_EXPANSION {
             return Err(Error::input("Workbook declared expansion limit exceeded"));
         }
-        let name = entry
+        let _name = entry
             .name()
             .map_err(|error| Error::input(format!("Invalid XLSX path: {error}")))?;
-        if is_worksheet_xml(&name) {
-            worksheet_indices.push(index);
-        }
-    }
-    if worksheet_indices.is_empty() {
-        return Err(Error::input("Workbook contains no worksheet XML"));
     }
 
-    for index in worksheet_indices {
+    // Validate actual decompressed bytes too. Central-directory sizes can be
+    // malformed, so never rely on those values as the only expansion bound.
+    let mut total_expanded = 0u64;
+    let mut worksheet_count = 0usize;
+    for index in 0..archive.len() {
         job.check()?;
         let entry = archive
             .by_index(index)
-            .map_err(|error| Error::input(format!("Invalid worksheet archive entry: {error}")))?;
-        let mut xml = Vec::with_capacity(entry.size().min(MAX_MEMBER_EXPANSION) as usize);
-        entry
-            .take(MAX_MEMBER_EXPANSION + 1)
-            .read_to_end(&mut xml)
-            .map_err(|error| Error::input(format!("Could not read worksheet XML: {error}")))?;
-        if xml.len() as u64 > MAX_MEMBER_EXPANSION {
-            return Err(Error::input("Worksheet XML expansion limit exceeded"));
+            .map_err(|error| Error::input(format!("Invalid XLSX archive entry: {error}")))?;
+        let name = entry
+            .name()
+            .map_err(|error| Error::input(format!("Invalid XLSX path: {error}")))?;
+        let is_worksheet = is_worksheet_xml(&name);
+        let allowed = MAX_MEMBER_EXPANSION.min(MAX_ARCHIVE_EXPANSION - total_expanded);
+        let read_limit = allowed + 1;
+        let expanded = if is_worksheet {
+            let mut xml = Vec::with_capacity(entry.size().min(allowed) as usize);
+            entry
+                .take(read_limit)
+                .read_to_end(&mut xml)
+                .map_err(|error| Error::input(format!("Could not read XLSX entry: {error}")))?;
+            if xml.len() as u64 > allowed {
+                return Err(Error::input("Workbook actual expansion limit exceeded"));
+            }
+            total_expanded += xml.len() as u64;
+            worksheet_count += 1;
+            validate_worksheet_xml(&xml, job)?;
+            xml.len() as u64
+        } else {
+            let mut limited = entry.take(read_limit);
+            let expanded = io::copy(&mut limited, &mut io::sink())
+                .map_err(|error| Error::input(format!("Could not read XLSX entry: {error}")))?;
+            if expanded > allowed {
+                return Err(Error::input("Workbook actual expansion limit exceeded"));
+            }
+            total_expanded += expanded;
+            expanded
+        };
+        if expanded > MAX_MEMBER_EXPANSION || total_expanded > MAX_ARCHIVE_EXPANSION {
+            return Err(Error::input("Workbook actual expansion limit exceeded"));
         }
-        validate_worksheet_xml(&xml, job)?;
+    }
+    if worksheet_count == 0 {
+        return Err(Error::input("Workbook contains no worksheet XML"));
     }
     Ok(())
 }
