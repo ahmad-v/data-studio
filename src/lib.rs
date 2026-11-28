@@ -1581,7 +1581,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     let sheet = match &project {
         Some(project) => project.worksheet.as_deref(),
         None => (matches!(r.operation.as_str(), "preview" | "export") && !r.parameter.is_empty())
-        .then_some(r.parameter.as_str()),
+            .then_some(r.parameter.as_str()),
     };
     if project.is_some()
         && sheet.is_some()
