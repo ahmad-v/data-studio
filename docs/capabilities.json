@@ -477,12 +477,12 @@
     },
     {
       "operation": "normalize-text",
-      "description": "Unicode trimming, case conversion or whitespace collapse",
+      "description": "Unicode trimming, case conversion or whitespace collapse; typed String/Categorical columns preserve schema, nulls and metadata",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Added categorical mapping, null/metadata preservation, standalone typed-route and typed-project regression tests; hosted verification pending"
     },
     {
       "operation": "rename-columns",
@@ -675,12 +675,12 @@
     },
     {
       "operation": "replace-literal",
-      "description": "Bounded non-overlapping literal replacement in one text column",
+      "description": "Bounded non-overlapping literal replacement; typed String/Categorical columns preserve schema, nulls and metadata",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux route and versioned-project fixtures passed; hosted matrix pending"
+      "fixture_status": "Added standalone typed-route and typed-project regression tests; hosted verification pending"
     },
     {
       "operation": "drop-rows-any-missing",
