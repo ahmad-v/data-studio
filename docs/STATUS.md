@@ -18,10 +18,10 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | head-rows / tail-rows / reverse-rows | Typed row selection and ordering for supported CSV/TSV and scalar Parquet | Regression route added; hosted verification pending |
 | deduplicate | Keep the first occurrence of each full row; common CSV/TSV/Parquet routes compare typed values and retain nulls | Legacy Linux fixture passed; typed regression added, hosted verification pending |
 | mask-column | Replace nonempty cells in one selected column | Linux fixture and CLI-tested |
-| inner-join | Bounded exact-text fallback plus typed key matching for CSV/TSV and supported scalar Parquet input, with typed Parquet output | Regression route added; new hosted verification pending |
-| left-join | Left outer join with duplicate-key expansion and blank-key nonmatching | Linux fixture-tested |
-| right-join | Right outer join preserving right input order and every unmatched row | Linux fixture-tested |
-| full-join | Full outer join preserving unmatched rows from both tables | Linux fixture-tested |
+| inner-join | Bounded exact-text fallback plus type-aware joins for CSV/TSV, first-sheet XLSX and supported scalar Parquet, with typed output | Regression routes preserve types and source; hosted check pending |
+| left-join | Typed outer join for CSV/TSV, first-sheet XLSX and supported scalar Parquet; preserves unmatched left rows and null side values | Local typed fixture passed; hosted check pending |
+| right-join | Typed outer join preserving right order and omitting the right key per the existing output contract | Local typed fixture passed; hosted check pending |
+| full-join | Typed outer join preserving both unmatched sides, nulls and source schema | Local typed fixture passed; hosted check pending |
 | run-project | Version 1 retains text behavior unless `typed_schema` is supplied; version 2 infers typed columns by default. Typed pipelines preserve Parquet schema, nulls, categories and metadata across comparisons, bounded numeric expressions, rename, inner join, group sum/mean, sorting, selection, row windows and missing-value handling | Tests cover comparisons, expression errors, metadata, schema-preserving rename/join/aggregation, null semantics and failure isolation; v2 inference regression added, hosted verification pending |
 | select-sql | One read-only SQLite SELECT over the imported text table | Linux fixture and reference CLI-tested |
 | group-summary | Grouped finite numeric descriptive statistics | Linux unit fixture and CLI-tested |
@@ -44,8 +44,8 @@ Alpha source is on GitHub. The initial Rust integration checks ran on Linux x86_
 | merge-columns | Append a delimited column while retaining source columns | Linux route and project fixtures |
 | pivot | Long-to-wide reshape with duplicate-pair rejection | Linux route and project fixtures |
 | unpivot | Wide-to-long reshape with selected id/value columns | Linux route and project fixtures |
-| group-sum | Grouped finite numeric sum | Linux route and project fixtures |
-| group-mean | Grouped finite numeric mean | Linux route and project fixtures |
+| group-sum | Typed standalone and project sum for CSV/TSV, first-sheet XLSX and supported scalar Parquet; preserves group schema and metadata | Typed Parquet round-trip fixture added; hosted validation pending |
+| group-mean | Typed standalone and project mean for CSV/TSV, first-sheet XLSX and supported scalar Parquet; preserves group schema and metadata | Typed Parquet round-trip fixture added; hosted validation pending |
 | filter-contains | Case-sensitive literal substring inclusion | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | filter-not-contains | Case-sensitive literal substring exclusion | Linux route and versioned-project fixtures passed; hosted matrix pending |
 | head-rows | Keep first N rows in source order | Linux route and versioned-project fixtures passed; hosted matrix pending |

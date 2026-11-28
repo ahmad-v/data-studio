@@ -25,10 +25,10 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"sort",label:"Sort rows",hint:"Enter a column name. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs use stable typed order for previews and supported outputs; nulls sort last. CSV/TSV output serializes nulls as empty fields."},
  Operation{id:"deduplicate",label:"Deduplicate rows",hint:"Keep the first occurrence of each exact row. Optional CSV, TSV or Parquet output."},
  Operation{id:"mask-column",label:"Mask a column",hint:"Enter the exact column name. Replace its nonempty cells with [MASKED]. Optional new CSV, TSV or Parquet output."},
- Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Supported CSV, TSV and scalar Parquet inputs use type-matched keys (nulls never match); other formats retain exact nonblank text matching. Optional new CSV, TSV or Parquet output."#},
- Operation{id:"left-join",label:"Left join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched left rows; nonmatching right columns are blank. Exact nonblank text keys."#},
- Operation{id:"right-join",label:"Right join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched right rows; nonmatching left columns are blank. Exact nonblank text keys."#},
- Operation{id:"full-join",label:"Full outer join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Preserves unmatched rows from both tables; missing-side columns are blank."#},
+ Operation{id:"inner-join",label:"Inner join tables",hint:r#"Enter JSON with right_path, left_key and right_key. CSV, TSV, first-sheet XLSX and supported scalar Parquet use type-matched keys (nulls never match); other formats retain exact nonblank text matching. Typed output preserves column types."#},
+ Operation{id:"left-join",label:"Left join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Typed CSV/TSV/XLSX/Parquet joins preserve unmatched left rows and nullable right columns. Null keys never match."#},
+ Operation{id:"right-join",label:"Right join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Typed CSV/TSV/XLSX/Parquet joins preserve right-row order and unmatched right rows; the right key remains omitted for compatibility."#},
+ Operation{id:"full-join",label:"Full outer join tables",hint:r#"Enter JSON with right_path, left_key and right_key. Typed CSV/TSV/XLSX/Parquet joins preserve both unmatched sides and keep nulls in missing-side columns."#},
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs preserve inferred types in previews and Parquet output; CSV/TSV output serializes nulls as empty fields."},
@@ -55,8 +55,8 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"merge-columns",label:"Merge columns",hint:r#"Parameter JSON: {"columns":["first","last"],"name":"full","delimiter":" "}. Source columns remain unchanged."#},
  Operation{id:"pivot",label:"Pivot long to wide",hint:r#"Parameter JSON: {"id_column":"id","pivot_column":"year","value_column":"value"}. Duplicate id/category pairs are rejected."#},
  Operation{id:"unpivot",label:"Unpivot wide to long",hint:r#"Parameter JSON: {"id_columns":["id"],"value_columns":["2024","2025"],"variable_name":"year","value_name":"value"}."#},
- Operation{id:"group-sum",label:"Group and sum",hint:r#"Parameter JSON: {"group_column":"site","value_column":"count"}. Blank numeric cells are excluded; exact text groups retained."#},
- Operation{id:"group-mean",label:"Group and average",hint:r#"Parameter JSON: {"group_column":"site","value_column":"score"}. Blank numeric cells are excluded; exact text groups retained."#},
+ Operation{id:"group-sum",label:"Group and sum",hint:r#"Parameter JSON: {"group_column":"site","value_column":"count"}. Supported CSV, TSV, first-sheet XLSX and scalar Parquet use the typed aggregator; null numeric values are excluded and output schema is preserved."#},
+ Operation{id:"group-mean",label:"Group and average",hint:r#"Parameter JSON: {"group_column":"site","value_column":"score"}. Supported CSV, TSV, first-sheet XLSX and scalar Parquet use the typed aggregator; null numeric values are excluded and output schema is preserved."#},
  Operation{id:"filter-contains",label:"Filter literal contains",hint:r#"Parameter JSON: {"column":"name","value":"Ada"}. Case-sensitive literal substring match; empty search terms are rejected."#},
  Operation{id:"filter-not-contains",label:"Filter literal does not contain",hint:r#"Parameter JSON: {"column":"name","value":"test"}. Case-sensitive literal substring exclusion."#},
  Operation{id:"head-rows",label:"Keep first rows",hint:r#"Parameter JSON: {"rows":100}. Keeps the first N rows in their existing order."#},
@@ -1270,7 +1270,12 @@ fn try_typed_basic_operation(
             | "head-rows"
             | "tail-rows"
             | "reverse-rows"
+            | "group-sum"
+            | "group-mean"
             | "inner-join"
+            | "left-join"
+            | "right-join"
+            | "full-join"
     ) {
         return Ok(None);
     }
@@ -1293,7 +1298,10 @@ fn try_typed_basic_operation(
     {
         return Ok(None);
     }
-    let join_request = if operation == "inner-join" {
+    let join_request = if matches!(
+        operation,
+        "inner-join" | "left-join" | "right-join" | "full-join"
+    ) {
         if parameter.len() > 32 * 1024 {
             return Err(Error::new(
                 ErrorKind::Limit,
@@ -1321,7 +1329,13 @@ fn try_typed_basic_operation(
             typed::SchemaRequest::default(),
             job,
         )?;
-        table = table.inner_join(right, &options.left_key, &options.right_key, job)?;
+        let kind = match operation {
+            "left-join" => join::Kind::Left,
+            "right-join" => join::Kind::Right,
+            "full-join" => join::Kind::Full,
+            _ => join::Kind::Inner,
+        };
+        table = table.join(right, &options.left_key, &options.right_key, kind, job)?;
     } else {
         match step.expect("non-join operations have a parsed typed step") {
             Step::Filter { column, value } => table.filter_equal(&column, &value, job)?,
@@ -1389,6 +1403,14 @@ fn try_typed_basic_operation(
             Step::HeadRows { rows } => table.head_rows(rows, job)?,
             Step::TailRows { rows } => table.tail_rows(rows, job)?,
             Step::ReverseRows {} => table.reverse_rows(job)?,
+            Step::GroupSum {
+                group_column,
+                value_column,
+            } => table.group_numeric_operation(&group_column, &value_column, false, job)?,
+            Step::GroupMean {
+                group_column,
+                value_column,
+            } => table.group_numeric_operation(&group_column, &value_column, true, job)?,
             _ => return Ok(None),
         }
     }
@@ -1928,6 +1950,97 @@ mod tests {
             .unwrap();
         assert_eq!(labels.value(0), "A");
         assert_eq!(labels.value(1), "B");
+    }
+
+    #[test]
+    fn standalone_outer_joins_preserve_types_null_keys_and_unmatched_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let left = directory.path().join("left.csv");
+        let right = directory.path().join("right.csv");
+        std::fs::write(&left, "id,value\n1,A\n2,B\n2,C\n,\n").unwrap();
+        std::fs::write(&right, "key,extra\n2,X\n3,Y\n,Z\n").unwrap();
+
+        for (operation, expected_rows) in [("left-join", 4), ("right-join", 4), ("full-join", 6)] {
+            let output = directory.path().join(format!("{operation}.parquet"));
+            let parameter = serde_json::json!({
+                "right_path": right,
+                "left_key": "id",
+                "right_key": "key"
+            })
+            .to_string();
+            let outcome = handle(
+                Request {
+                    operation: operation.into(),
+                    input: left.clone(),
+                    output: output.clone(),
+                    parameter,
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+            .unwrap();
+            let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+            assert_eq!(report["rows"], expected_rows, "{operation}");
+            assert_eq!(report["schema"]["columns"][0]["type"], "int64");
+            assert!(report["headers"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("right.extra")));
+            assert!(output.is_file());
+        }
+
+        let full = typed::TypedTable::from_path(
+            &directory.path().join("full-join.parquet"),
+            None,
+            typed::SchemaRequest::default(),
+            &Job::new(),
+        )
+        .unwrap();
+        let rows = full.preview_report()["preview"].as_array().unwrap().clone();
+        assert_eq!(rows[4][0], "");
+        assert_eq!(rows[4][1], "");
+        assert_eq!(rows[4][2], "Y");
+        assert_eq!(rows[3][0], "");
+        assert_eq!(rows[5][0], "");
+        assert_eq!(
+            std::fs::read_to_string(&left).unwrap(),
+            "id,value\n1,A\n2,B\n2,C\n,\n"
+        );
+    }
+
+    #[test]
+    fn standalone_group_aggregations_keep_typed_schema_and_null_semantics() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("values.csv");
+        std::fs::write(&input, "site,count\nnorth,2\nsouth,5\nnorth,\n,7\n").unwrap();
+        let original = std::fs::read(&input).unwrap();
+
+        for (operation, aggregate) in [("group-sum", "sum"), ("group-mean", "mean")] {
+            let output = directory.path().join(format!("{operation}.parquet"));
+            let parameter = serde_json::json!({
+                "group_column": "site",
+                "value_column": "count"
+            })
+            .to_string();
+            let outcome = handle(
+                Request {
+                    operation: operation.into(),
+                    input: input.clone(),
+                    output,
+                    parameter,
+                    ..Request::default()
+                },
+                Job::new(),
+            )
+            .unwrap();
+            let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+            assert_eq!(report["rows"], 3);
+            assert_eq!(report["headers"][1], "n");
+            assert_eq!(report["headers"][2], aggregate);
+            assert_eq!(report["schema"]["columns"][1]["type"], "int64");
+            assert_eq!(report["schema"]["columns"][2]["type"], "float64");
+            assert_eq!(std::fs::read(&input).unwrap(), original);
+        }
     }
 
     #[test]
