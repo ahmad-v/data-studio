@@ -18,7 +18,7 @@ fn table_workspace_from_result(
         return Ok(None);
     };
     if report["workspace_version"].as_u64() != Some(1) {
-        return Ok(None);
+        return typed_project_preview_workspace(&report);
     }
     let headers = report["headers"]
         .as_array()
@@ -187,6 +187,216 @@ fn table_workspace_from_result(
     }))
 }
 
+/// Typed projects expose only a 30-row preview in their result payload. Present
+/// those rows in the native table view while making the sample scope explicit.
+#[cfg(feature = "gui")]
+fn typed_project_preview_workspace(
+    report: &serde_json::Value,
+) -> std::result::Result<Option<localwright_ui::TableWorkspace>, String> {
+    use localwright_ui::{
+        CellValue, TableColumnInfo, TableModel, TableWorkspace, MAX_TABLE_COLUMNS,
+    };
+
+    let schema_report = &report["schema"];
+    if schema_report["schema_version"].as_u64() != Some(1) || !report["preview"].is_array() {
+        return Ok(None);
+    }
+
+    let headers = report["headers"]
+        .as_array()
+        .ok_or_else(|| "typed project preview has no headers".to_owned())?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "typed project preview header is not text".to_owned())
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let schema_columns = schema_report["columns"]
+        .as_array()
+        .ok_or_else(|| "typed project preview has no column schema".to_owned())?;
+    if schema_columns.len() != headers.len() {
+        return Err("typed project preview headers and schema have different lengths".into());
+    }
+    if schema_columns.len() > MAX_TABLE_COLUMNS {
+        return Ok(None);
+    }
+    let schema = schema_columns
+        .iter()
+        .map(|column| {
+            let data_type = column["type"]
+                .as_str()
+                .ok_or_else(|| "typed project schema column has no type".to_owned())?
+                .to_owned();
+            if !matches!(
+                data_type.as_str(),
+                "boolean"
+                    | "int64"
+                    | "uint64"
+                    | "float64"
+                    | "date"
+                    | "time"
+                    | "datetime"
+                    | "categorical"
+                    | "string"
+                    | "null"
+            ) {
+                return Err(format!("unsupported typed project column {data_type:?}"));
+            }
+            Ok(TableColumnInfo {
+                name: column["name"]
+                    .as_str()
+                    .ok_or_else(|| "typed project schema column has no name".to_owned())?
+                    .to_owned(),
+                data_type,
+                nullable: column["nullable"]
+                    .as_bool()
+                    .ok_or_else(|| "typed project schema column has no nullable flag".to_owned())?,
+                missing: usize::try_from(column["missing"].as_u64().ok_or_else(|| {
+                    "typed project schema column has no missing count".to_owned()
+                })?)
+                .map_err(|_| "typed project missing count exceeds the platform size".to_owned())?,
+                label: column["label"].as_str().map(str::to_owned),
+                unit: column["unit"].as_str().map(str::to_owned),
+            })
+        })
+        .collect::<std::result::Result<Vec<_>, String>>()?;
+    if schema
+        .iter()
+        .zip(&headers)
+        .any(|(column, header)| column.name.as_str() != header.as_str())
+    {
+        return Err("typed project preview headers do not match the schema".into());
+    }
+    let total_rows = usize::try_from(
+        report["rows"]
+            .as_u64()
+            .ok_or_else(|| "typed project preview has no total row count".to_owned())?,
+    )
+    .map_err(|_| "typed project row count exceeds the platform size".to_owned())?;
+    if schema_report["rows"].as_u64() != Some(total_rows as u64) {
+        return Err("typed project preview and schema row counts differ".into());
+    }
+    let preview_rows = report["preview"]
+        .as_array()
+        .ok_or_else(|| "typed project preview rows are missing".to_owned())?;
+    if preview_rows.len() > 30 || preview_rows.len() != total_rows.min(30) {
+        return Err("typed project preview row count is outside its bound".into());
+    }
+    let rows = preview_rows
+        .iter()
+        .map(|row| {
+            let values = row
+                .as_array()
+                .ok_or_else(|| "typed project preview row is not an array".to_owned())?;
+            if values.len() != schema.len() {
+                return Err("typed project preview row width does not match its schema".to_owned());
+            }
+            values
+                .iter()
+                .zip(&schema)
+                .map(|(value, column)| {
+                    if value.is_null() {
+                        return if column.nullable {
+                            Ok(CellValue::Null)
+                        } else {
+                            Err(format!(
+                                "null value in non-nullable typed column {:?}",
+                                column.name
+                            ))
+                        };
+                    }
+                    let text = value
+                        .as_str()
+                        .ok_or_else(|| "typed project preview cell is not text".to_owned())?;
+                    if text.trim().is_empty() {
+                        if column.data_type == "string" {
+                            // Project previews encode string nulls and empty strings alike.
+                            return Ok(if column.nullable {
+                                CellValue::Null
+                            } else {
+                                CellValue::Text(text.to_owned())
+                            });
+                        }
+                        return if column.nullable || column.data_type == "null" {
+                            Ok(CellValue::Null)
+                        } else {
+                            Err(format!(
+                                "blank value in non-nullable typed column {:?}",
+                                column.name
+                            ))
+                        };
+                    }
+                    match column.data_type.as_str() {
+                        "boolean" => match text.trim().to_ascii_lowercase().as_str() {
+                            "true" | "yes" | "1" => Ok(CellValue::Boolean(true)),
+                            "false" | "no" | "0" => Ok(CellValue::Boolean(false)),
+                            _ => Err("invalid Boolean project preview cell".to_owned()),
+                        },
+                        "int64" => text
+                            .trim()
+                            .parse::<i64>()
+                            .map(CellValue::Integer)
+                            .map_err(|_| "invalid signed integer project preview cell".to_owned()),
+                        "uint64" => text
+                            .trim()
+                            .parse::<u64>()
+                            .map(CellValue::UnsignedInteger)
+                            .map_err(|_| {
+                                "invalid unsigned integer project preview cell".to_owned()
+                            }),
+                        "float64" => text
+                            .parse::<f64>()
+                            .ok()
+                            .filter(|number| number.is_finite())
+                            .map(CellValue::Float)
+                            .ok_or_else(|| "invalid float project preview cell".to_owned()),
+                        "date" | "time" | "datetime" => Ok(CellValue::DateTime(text.to_owned())),
+                        "categorical" => Ok(CellValue::Categorical(text.to_owned())),
+                        "string" => Ok(CellValue::Text(text.to_owned())),
+                        "null" => Err("non-null value in null-typed project column".into()),
+                        _ => Err(format!(
+                            "unsupported typed project column {:?}",
+                            column.data_type
+                        )),
+                    }
+                })
+                .collect::<std::result::Result<Vec<_>, String>>()
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let displayed = rows.len();
+    let column_count = schema.len();
+    let table = TableModel::new(headers, rows).map_err(|error| error.to_string())?;
+    let range = if displayed == 0 {
+        "no rows".to_owned()
+    } else {
+        format!("rows 1–{displayed} of {total_rows}")
+    };
+    let coverage = if displayed == total_rows {
+        "The complete project result fits in this preview."
+    } else {
+        "This is only the first 30-row project preview; table sorting and search affect these displayed rows only. Add sort/filter steps to the project to transform the full result."
+    };
+    let string_ambiguity = if schema
+        .iter()
+        .any(|column| column.data_type == "string" && column.nullable)
+    {
+        " Blank cells in nullable string columns may represent either null or empty text in the project preview."
+    } else {
+        ""
+    };
+    Ok(Some(TableWorkspace {
+        title: "Typed project result".into(),
+        summary: format!(
+            "Showing {range} across {column_count} columns. {coverage}{string_ambiguity} Cell text is capped at 256 characters; the source remains unchanged."
+        ),
+        schema,
+        table,
+    }))
+}
+
 #[cfg(all(test, feature = "gui"))]
 mod tests {
     use super::*;
@@ -253,6 +463,70 @@ mod tests {
         assert!(table
             .summary
             .contains("header sorting/search applies to this page"));
+    }
+
+    #[test]
+    fn typed_project_results_open_in_a_bounded_workspace_with_explicit_scope() {
+        let preview = (0..30)
+            .map(|row| {
+                if row == 1 {
+                    serde_json::json!([" ", ""])
+                } else {
+                    serde_json::json!([row.to_string(), format!("sample-{row}")])
+                }
+            })
+            .collect::<Vec<_>>();
+        let report = serde_json::json!({
+            "rows": 40,
+            "headers": ["count", "note"],
+            "preview": preview,
+            "schema": {
+                "schema_version": 1,
+                "rows": 40,
+                "columns": [
+                    {"name":"count", "type":"int64", "nullable":true, "missing":1, "label":"Count", "unit":null},
+                    {"name":"note", "type":"string", "nullable":true, "missing":1, "label":null, "unit":null}
+                ]
+            }
+        })
+        .to_string();
+        let workspace = table_workspace_from_result(&report)
+            .unwrap()
+            .expect("typed project table preview");
+        assert_eq!(workspace.table.row_count(), 30);
+        assert_eq!(workspace.schema[0].label.as_deref(), Some("Count"));
+        assert_eq!(workspace.table.value_at(0, 0), Some(&CellValue::Integer(0)));
+        assert_eq!(
+            workspace.table.value_at(0, 1),
+            Some(&CellValue::Text("sample-0".into()))
+        );
+        assert_eq!(workspace.table.value_at(1, 0), Some(&CellValue::Null));
+        assert_eq!(workspace.table.value_at(1, 1), Some(&CellValue::Null));
+        assert!(workspace.summary.contains("rows 1–30 of 40"));
+        assert!(workspace
+            .summary
+            .contains("sorting and search affect these displayed rows only"));
+        assert!(workspace.summary.contains(
+            "Blank cells in nullable string columns may represent either null or empty text"
+        ));
+    }
+
+    #[test]
+    fn typed_project_preview_rejects_inconsistent_row_bounds() {
+        let report = serde_json::json!({
+            "rows": 31,
+            "headers": ["value"],
+            "preview": (0..31).map(|value| vec![value.to_string()]).collect::<Vec<_>>(),
+            "schema": {
+                "schema_version": 1,
+                "rows": 31,
+                "columns": [
+                    {"name":"value", "type":"int64", "nullable":false, "missing":0, "label":null, "unit":null}
+                ]
+            }
+        })
+        .to_string();
+        assert!(table_workspace_from_result(&report).is_err());
     }
 
     #[test]
