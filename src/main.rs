@@ -354,6 +354,7 @@ fn typed_project_preview_workspace(
                             .ok_or_else(|| "invalid float project preview cell".to_owned()),
                         "date" | "time" | "datetime" => Ok(CellValue::DateTime(text.to_owned())),
                         "categorical" => Ok(CellValue::Categorical(text.to_owned())),
+                        "string" => Ok(CellValue::Text(text.to_owned())),
                         "null" => Err("non-null value in null-typed project column".into()),
                         _ => Err(format!(
                             "unsupported typed project column {:?}",
@@ -495,6 +496,10 @@ mod tests {
         assert_eq!(workspace.table.row_count(), 30);
         assert_eq!(workspace.schema[0].label.as_deref(), Some("Count"));
         assert_eq!(workspace.table.value_at(0, 0), Some(&CellValue::Integer(0)));
+        assert_eq!(
+            workspace.table.value_at(0, 1),
+            Some(&CellValue::Text("sample-0".into()))
+        );
         assert_eq!(workspace.table.value_at(1, 0), Some(&CellValue::Null));
         assert_eq!(workspace.table.value_at(1, 1), Some(&CellValue::Null));
         assert!(workspace.summary.contains("rows 1–30 of 40"));
