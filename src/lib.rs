@@ -19,7 +19,7 @@ use std::{io::Cursor, path::Path, sync::Arc};
 pub const OPERATIONS:&[Operation]=&[
  Operation{id:"preview",label:"Preview",hint:"Preview CSV, TSV, XLSX or supported flat scalar Parquet columns as text. For XLSX, enter a worksheet name or leave blank for the first sheet."},
  Operation{id:"inspect-schema",label:"Inspect typed schema",hint:r#"Optional JSON: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates per-column types and missing values without changing source data. Optional new .json report."#},
- Operation{id:"inspect-table",label:"Inspect typed table",hint:"Load the selected CSV, TSV, XLSX worksheet or scalar Parquet table into the native paginated Data table workspace. The view is capped at 10,000 cells, cell text at 256 characters; sorting applies to the loaded preview only. Inspect types, null counts, labels and units; no output is written."},
+ Operation{id:"inspect-table",label:"Inspect typed table",hint:r#"Optional JSON query: {"worksheet":"Data","filters":[{"column":"score","comparison":"gte","value":"10"}],"sort":{"column":"date","descending":true},"offset":0,"limit":100}. `worksheet` is optional for XLSX (leave blank/default for the first sheet); a plain worksheet name remains supported. Up to eight typed filters and optional stable sort apply to the complete accepted dataset before the requested page is selected. Use offsets to inspect additional pages. Table header sort applies only to the displayed page. This operation loads the bounded dataset in memory; current file/cell limits still apply. Optional output is not supported."#},
  Operation{id:"export-typed-parquet",label:"Export typed Parquet",hint:r#"Required JSON schema options: {"overrides":{"score":"float64"},"metadata":{"score":{"label":"Score","unit":"points"}}}. Infers or validates primitive types, nulls and categoricals, then writes a new typed .parquet file."#},
  Operation{id:"filter",label:"Filter",hint:"Enter column=value. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs use inferred typed equality for previews and supported outputs; numeric 010 matches numeric 10. CSV/TSV output serializes nulls as empty fields."},
  Operation{id:"select-columns",label:"Select columns",hint:"Enter comma-separated column names in output order. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs use typed columns for previews and supported outputs. CSV/TSV output serializes nulls as empty fields."},
@@ -1580,9 +1580,8 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
     };
     let sheet = match &project {
         Some(project) => project.worksheet.as_deref(),
-        None => (matches!(r.operation.as_str(), "preview" | "export" | "inspect-table")
-            && !r.parameter.is_empty())
-        .then_some(r.parameter.as_str()),
+        None => (matches!(r.operation.as_str(), "preview" | "export") && !r.parameter.is_empty())
+            .then_some(r.parameter.as_str()),
     };
     if project.is_some()
         && sheet.is_some()
@@ -1612,12 +1611,36 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 "Inspect typed table does not write an output file",
             ));
         }
-        let typed =
+        let is_xlsx = r
+            .input
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("xlsx"));
+        let legacy_worksheet = if is_xlsx
+            && !r.parameter.trim().is_empty()
+            && !r.parameter.trim_start().starts_with('{')
+        {
+            Some(r.parameter.as_str())
+        } else {
+            None
+        };
+        let query = if legacy_worksheet.is_some() {
+            typed::WorkspaceQuery::default()
+        } else {
+            typed::WorkspaceQuery::from_json(&r.parameter)?
+        };
+        if query.worksheet.is_some() && !is_xlsx {
+            return Err(Error::input(
+                "Table worksheet selection requires XLSX input",
+            ));
+        }
+        let sheet = query.worksheet.as_deref().or(legacy_worksheet);
+        let mut typed =
             typed::TypedTable::from_path(&r.input, sheet, typed::SchemaRequest::default(), &j)?;
-        let report = serde_json::to_string(&typed.workspace_report(&j)?)?;
+        let report = serde_json::to_string(&typed.workspace_query_report(query, &j)?)?;
         return Ok(Outcome {
             preview: report,
-            warnings: vec!["Loaded typed values for the native table workspace. Blank cells remain null, explicit empty strings remain text, and the source file is unchanged.".into()],
+            warnings: vec!["Typed filters and sorting run over the complete accepted dataset before page selection. Re-run with a different offset to navigate. Header sorting and table search apply only to the returned page. Inspection is in-memory and remains subject to input and cell limits; the source is unchanged.".into()],
             ..Outcome::default()
         });
     }
@@ -2811,6 +2834,30 @@ mod tests {
         assert_eq!(scores.value(0), 1.5);
         assert_eq!(scores.value(1), 1.5);
         assert!(scores.is_null(2));
+    }
+
+    #[test]
+    fn native_table_query_applies_dataset_filter_sort_and_page_parameters() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("table.csv");
+        std::fs::write(&input, "id,score\n1,1\n2,5\n3,3\n4, \n5,4\n6,2\n").unwrap();
+        let outcome = handle(
+            Request {
+                operation: "inspect-table".into(),
+                input,
+                parameter: r#"{"filters":[{"column":"score","comparison":"gte","value":"2"}],"sort":{"column":"score","descending":true},"offset":1,"limit":2}"#.into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&outcome.preview).unwrap();
+        assert_eq!(report["source_rows"], 6);
+        assert_eq!(report["total_rows"], 4);
+        assert_eq!(report["row_offset"], 1);
+        assert_eq!(report["rows"][0][0], 5);
+        assert_eq!(report["rows"][1][0], 3);
+        assert!(outcome.warnings[0].contains("complete accepted dataset"));
     }
 
     #[test]

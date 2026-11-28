@@ -132,23 +132,53 @@ fn table_workspace_from_result(
     let truncated = report["truncated"]
         .as_bool()
         .ok_or_else(|| "table payload has no truncation flag".to_owned())?;
+    let row_offset = usize::try_from(report["row_offset"].as_u64().unwrap_or(0))
+        .map_err(|_| "table row offset exceeds the platform size".to_owned())?;
     if displayed_rows != rows.len()
         || displayed_rows > total_rows
-        || truncated != (displayed_rows < total_rows)
+        || row_offset > total_rows
+        || row_offset.saturating_add(displayed_rows) > total_rows
+        || truncated != (row_offset.saturating_add(displayed_rows) < total_rows)
     {
         return Err("table payload row counts do not match its data".into());
     }
     let column_count = headers.len();
     let table = TableModel::new(headers, rows).map_err(|error| error.to_string())?;
-    let summary = if truncated {
-        format!(
-            "Showing first {displayed_rows} of {total_rows} rows across {column_count} columns. Sorting applies to this preview only. Cell text is capped at 256 characters; source data is unchanged."
-        )
+    let source_rows = report["source_rows"].as_u64().unwrap_or(total_rows as u64);
+    let filtering = report["dataset_filtered"].as_bool().unwrap_or(false);
+    let sort_column = report["dataset_sort_column"].as_str();
+    let descending = report["dataset_sort_descending"].as_bool().unwrap_or(false);
+    let dataset_scope = if filtering || sort_column.is_some() {
+        let filter_note = if filtering {
+            format!("; filters applied to all {source_rows} input rows")
+        } else {
+            String::new()
+        };
+        let sort_note = sort_column.map_or(String::new(), |column| {
+            let direction = if descending {
+                "descending"
+            } else {
+                "ascending"
+            };
+            format!("; dataset sorted {direction} by {column:?} before paging")
+        });
+        format!("{filter_note}{sort_note}; header sorting/search applies to this page")
+    } else {
+        "; header sorting/search applies to this page".to_owned()
+    };
+    let range = if displayed_rows == 0 {
+        "no rows".to_owned()
     } else {
         format!(
-            "Showing all {total_rows} rows across {column_count} columns. Sorting changes view order only. Cell text is capped at 256 characters; source data is unchanged."
+            "rows {}–{} of {}",
+            row_offset + 1,
+            row_offset + displayed_rows,
+            total_rows
         )
     };
+    let summary = format!(
+        "Showing {range} across {column_count} columns{dataset_scope}. Table selection indices are relative to this page. Cell text is capped at 256 characters; source data is unchanged."
+    );
     Ok(Some(TableWorkspace {
         title: "Typed data table".into(),
         summary,
@@ -189,6 +219,40 @@ mod tests {
             Some(CellValue::Text(value)) if value.is_empty()
         ));
         assert_eq!(table.table.value_at(1, 1), Some(&CellValue::Null));
+    }
+
+    #[test]
+    fn table_workspace_summary_reports_dataset_query_scope_and_absolute_page_range() {
+        let report = serde_json::json!({
+            "workspace_version": 1,
+            "source_rows": 60,
+            "total_rows": 50,
+            "row_offset": 20,
+            "displayed_rows": 2,
+            "truncated": true,
+            "dataset_filtered": true,
+            "dataset_sort_column": "score",
+            "dataset_sort_descending": true,
+            "headers": ["score"],
+            "schema": [
+                {"name":"score", "type":"int64", "nullable":false, "missing":0, "label":null, "unit":null}
+            ],
+            "rows": [[5], [4]]
+        })
+        .to_string();
+        let table = table_workspace_from_result(&report)
+            .unwrap()
+            .expect("typed workspace payload");
+        assert!(table.summary.contains("rows 21–22 of 50"));
+        assert!(table
+            .summary
+            .contains("filters applied to all 60 input rows"));
+        assert!(table
+            .summary
+            .contains("dataset sorted descending by \"score\" before paging"));
+        assert!(table
+            .summary
+            .contains("header sorting/search applies to this page"));
     }
 
     #[test]
