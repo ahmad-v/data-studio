@@ -501,7 +501,7 @@ mod tests {
         assert!(workspace
             .summary
             .contains("sorting and search affect these displayed rows only"));
-        assert!(workspace.summary.summary.contains(
+        assert!(workspace.summary.contains(
             "blank cells in nullable string columns may represent either null or empty text"
         ));
     }
