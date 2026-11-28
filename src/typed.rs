@@ -1858,6 +1858,162 @@ impl TypedTable {
         Ok(())
     }
 
+    /// Build the descriptive grouped-statistics result using typed key and
+    /// numeric columns while retaining the established output header contract.
+    pub(crate) fn group_summary(
+        &self,
+        group_name: &str,
+        value_name: &str,
+        job: &Job,
+    ) -> Result<Self> {
+        struct Summary {
+            key: Scalar,
+            raw_text: Option<String>,
+            n: i64,
+            missing: i64,
+            mean: f64,
+            m2: f64,
+            min: f64,
+            max: f64,
+        }
+
+        let group_column = &self.columns[self.column_index(group_name)?];
+        let value_column = &self.columns[self.column_index(value_name)?];
+        if !matches!(
+            value_column.kind,
+            ColumnType::Null | ColumnType::Int64 | ColumnType::UInt64 | ColumnType::Float64
+        ) {
+            return Err(Error::input(format!(
+                "Summary column {value_name:?} must have a numeric type"
+            )));
+        }
+
+        let mut lookup = HashMap::<String, usize>::new();
+        let mut groups = Vec::<Summary>::new();
+        for row in 0..self.rows {
+            job.check()?;
+            let key_value = &group_column.values[row];
+            let key = typed_join_key(group_column, key_value)?.unwrap_or_else(|| "n:".into());
+            let group_index = if let Some(index) = lookup.get(&key) {
+                *index
+            } else {
+                if groups.len() >= MAX_CELLS / 7 {
+                    return Err(Error::new(
+                        ErrorKind::Limit,
+                        "Grouped summary exceeds the typed cell limit",
+                    ));
+                }
+                let index = groups.len();
+                lookup.insert(key, index);
+                groups.push(Summary {
+                    key: key_value.clone(),
+                    raw_text: group_column.raw_text[row].clone(),
+                    n: 0,
+                    missing: 0,
+                    mean: 0.0,
+                    m2: 0.0,
+                    min: f64::INFINITY,
+                    max: f64::NEG_INFINITY,
+                });
+                index
+            };
+            let group = &mut groups[group_index];
+            let Some(value) = scalar_to_f64(value_column, &value_column.values[row])? else {
+                group.missing = group.missing.checked_add(1).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Limit,
+                        "Missing-value count exceeds the supported range",
+                    )
+                })?;
+                continue;
+            };
+            let next_n = group.n.checked_add(1).ok_or_else(|| {
+                Error::new(ErrorKind::Limit, "Group count exceeds the supported range")
+            })?;
+            let delta = value - group.mean;
+            group.mean += delta / next_n as f64;
+            group.m2 += delta * (value - group.mean);
+            group.min = group.min.min(value);
+            group.max = group.max.max(value);
+            if !group.mean.is_finite() || !group.m2.is_finite() {
+                return Err(Error::input("Numerical overflow in grouped summary"));
+            }
+            group.n = next_n;
+        }
+
+        let mut order = (0..groups.len()).collect::<Vec<_>>();
+        order.sort_by(|left, right| {
+            let label = |index: usize| {
+                let group = &groups[index];
+                scalar_text(
+                    &group.key,
+                    &group_column.categories,
+                    group.raw_text.as_deref(),
+                )
+            };
+            label(*left).cmp(&label(*right))
+        });
+        let groups = order
+            .iter()
+            .map(|index| &groups[*index])
+            .collect::<Vec<_>>();
+
+        let mut group_output = group_column.clone();
+        group_output.name = "group".into();
+        group_output.values = groups.iter().map(|group| group.key.clone()).collect();
+        group_output.raw_text = groups.iter().map(|group| group.raw_text.clone()).collect();
+        let count_column = |name: &str, select: fn(&Summary) -> i64| Column {
+            name: name.into(),
+            kind: ColumnType::Int64,
+            values: groups
+                .iter()
+                .map(|group| Scalar::Int64(select(group)))
+                .collect(),
+            raw_text: vec![None; groups.len()],
+            categories: Vec::new(),
+            metadata: ColumnMetadata {
+                label: Some(name.into()),
+                unit: None,
+            },
+        };
+        let numeric_column =
+            |name: &str, unit: Option<String>, select: fn(&Summary) -> Option<f64>| Column {
+                name: name.into(),
+                kind: ColumnType::Float64,
+                values: groups
+                    .iter()
+                    .map(|group| select(group).map_or(Scalar::Null, Scalar::Float64))
+                    .collect(),
+                raw_text: vec![None; groups.len()],
+                categories: Vec::new(),
+                metadata: ColumnMetadata {
+                    label: Some(name.into()),
+                    unit,
+                },
+            };
+        let columns = vec![
+            group_output,
+            count_column("n", |group| group.n),
+            count_column("missing", |group| group.missing),
+            numeric_column("mean", value_column.metadata.unit.clone(), |group| {
+                (group.n > 0).then_some(group.mean)
+            }),
+            numeric_column("sample_sd", value_column.metadata.unit.clone(), |group| {
+                (group.n > 1).then(|| (group.m2 / (group.n - 1) as f64).max(0.0).sqrt())
+            }),
+            numeric_column("min", value_column.metadata.unit.clone(), |group| {
+                (group.n > 0).then_some(group.min)
+            }),
+            numeric_column("max", value_column.metadata.unit.clone(), |group| {
+                (group.n > 0).then_some(group.max)
+            }),
+        ];
+        Ok(Self {
+            columns,
+            rows: groups.len(),
+        })
+    }
+
     /// Stable, ascending sort using the typed value; nulls always sort after values.
     pub(crate) fn sort_by(&mut self, name: &str, job: &Job) -> Result<()> {
         let index = self.column_index(name)?;
