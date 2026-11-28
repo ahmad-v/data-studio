@@ -23,6 +23,7 @@ const MAX_WORKSPACE_TEXT_CHARS: usize = 255;
 const MAX_WORKSPACE_QUERY_BYTES: usize = 16 * 1024;
 const MAX_WORKSPACE_QUERY_FILTERS: usize = 8;
 const MAX_WORKSPACE_PAGE_ROWS: usize = 100;
+const MAX_TYPED_TRANSFORM_TEXT_BYTES: usize = 32 * 1024 * 1024;
 
 /// Physical type selected for a column in a typed table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1194,6 +1195,276 @@ impl TypedTable {
             keep.push(matched);
         }
         self.retain_rows(&keep, job)
+    }
+
+    /// Whether the selected column has text semantics suitable for an
+    /// in-place, type-preserving text transform.
+    pub(crate) fn supports_text_transform(&self, name: &str) -> Result<bool> {
+        let column = &self.columns[self.column_index(name)?];
+        Ok(matches!(
+            column.kind,
+            ColumnType::String | ColumnType::Categorical | ColumnType::Null
+        ))
+    }
+
+    /// Normalize a string or categorical column while preserving nulls,
+    /// categorical dictionaries, labels, units, and all other typed columns.
+    pub(crate) fn normalize_text_column(
+        &mut self,
+        name: &str,
+        mode: &str,
+        job: &Job,
+    ) -> Result<()> {
+        if !matches!(mode, "trim" | "lower" | "upper" | "collapse-whitespace") {
+            return Err(Error::input(
+                "Choose trim, lower, upper or collapse-whitespace",
+            ));
+        }
+        self.transform_text_column(name, job, |text, max_bytes| {
+            let transformed = match mode {
+                "trim" => text.trim().to_owned(),
+                "lower" => text.to_lowercase(),
+                "upper" => text.to_uppercase(),
+                "collapse-whitespace" => text.split_whitespace().collect::<Vec<_>>().join(" "),
+                _ => unreachable!("normalization mode was validated"),
+            };
+            if safe_text_len(&transformed) > max_bytes {
+                return Err(Error::new(
+                    ErrorKind::Limit,
+                    "Normalized table exceeds 32 MiB of cell text",
+                ));
+            }
+            Ok(transformed)
+        })
+    }
+
+    /// Replace literal, non-overlapping text matches without changing the
+    /// selected column's string or categorical type.
+    pub(crate) fn replace_literal_text(
+        &mut self,
+        name: &str,
+        find: &str,
+        replace: &str,
+        job: &Job,
+    ) -> Result<()> {
+        if find.is_empty() {
+            return Err(Error::input("Find text must not be empty"));
+        }
+        self.transform_text_column(name, job, |text, max_bytes| {
+            let matches = text.matches(find).count();
+            let removed = find
+                .len()
+                .checked_mul(matches)
+                .ok_or_else(|| Error::new(ErrorKind::Limit, "Replacement size overflow"))?;
+            let added = replace
+                .len()
+                .checked_mul(matches)
+                .ok_or_else(|| Error::new(ErrorKind::Limit, "Replacement size overflow"))?;
+            let new_len = text
+                .len()
+                .checked_sub(removed)
+                .and_then(|size| size.checked_add(added))
+                .ok_or_else(|| Error::new(ErrorKind::Limit, "Replacement size overflow"))?;
+            if new_len > max_bytes {
+                return Err(Error::new(
+                    ErrorKind::Limit,
+                    "Replaced table exceeds 32 MiB of cell text",
+                ));
+            }
+            let transformed = text.replace(find, replace);
+            if safe_text_len(&transformed) > max_bytes {
+                return Err(Error::new(
+                    ErrorKind::Limit,
+                    "Replaced table exceeds 32 MiB of cell text",
+                ));
+            }
+            Ok(transformed)
+        })
+    }
+
+    fn transform_text_column(
+        &mut self,
+        name: &str,
+        job: &Job,
+        mut transform: impl FnMut(&str, usize) -> Result<String>,
+    ) -> Result<()> {
+        let column_index = self.column_index(name)?;
+        let kind = self.columns[column_index].kind;
+        if kind == ColumnType::Null {
+            return Ok(());
+        }
+        if !matches!(kind, ColumnType::String | ColumnType::Categorical) {
+            return Err(Error::input(format!(
+                "Text transforms require a string or categorical column; {name:?} has type {kind:?}"
+            )));
+        }
+        let mut text_bytes = self.serialized_text_bytes(job)?;
+        if text_bytes > MAX_TYPED_TRANSFORM_TEXT_BYTES {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                "Typed table exceeds 32 MiB of cell text",
+            ));
+        }
+
+        let (values, raw_text, categories) = {
+            let column = &self.columns[column_index];
+            match kind {
+                ColumnType::String => {
+                    let mut values = Vec::with_capacity(self.rows);
+                    let mut raw_text = Vec::with_capacity(self.rows);
+                    for (value, raw) in column.values.iter().zip(&column.raw_text) {
+                        job.check()?;
+                        match value {
+                            Scalar::Null => {
+                                values.push(Scalar::Null);
+                                raw_text.push(raw.clone());
+                            }
+                            Scalar::String(text) => {
+                                let old_bytes =
+                                    scalar_text(value, &column.categories, raw.as_deref()).len();
+                                let max_bytes = MAX_TYPED_TRANSFORM_TEXT_BYTES
+                                    .saturating_sub(text_bytes.saturating_sub(old_bytes));
+                                let transformed = transform(text, max_bytes)?;
+                                let new_bytes = safe_text_len(&transformed);
+                                text_bytes = text_bytes
+                                    .checked_sub(old_bytes)
+                                    .and_then(|size| size.checked_add(new_bytes))
+                                    .filter(|size| *size <= MAX_TYPED_TRANSFORM_TEXT_BYTES)
+                                    .ok_or_else(|| {
+                                        Error::new(
+                                            ErrorKind::Limit,
+                                            "Transformed table exceeds 32 MiB of cell text",
+                                        )
+                                    })?;
+                                values.push(Scalar::String(transformed));
+                                raw_text.push(None);
+                            }
+                            _ => {
+                                return Err(Error::input(
+                                    "Typed string column contains an incompatible scalar",
+                                ))
+                            }
+                        }
+                    }
+                    (values, raw_text, column.categories.clone())
+                }
+                ColumnType::Categorical => {
+                    let mut counts = vec![0usize; column.categories.len()];
+                    let mut old_bytes = vec![0usize; column.categories.len()];
+                    for (value, raw) in column.values.iter().zip(&column.raw_text) {
+                        job.check()?;
+                        if let Scalar::Categorical(index) = value {
+                            let index = *index as usize;
+                            let _label = column
+                                .categories
+                                .get(index)
+                                .ok_or_else(|| Error::input("Invalid categorical value"))?;
+                            counts[index] = counts[index].checked_add(1).ok_or_else(|| {
+                                Error::new(ErrorKind::Limit, "Category count overflow")
+                            })?;
+                            old_bytes[index] = old_bytes[index]
+                                .checked_add(
+                                    scalar_text(value, &column.categories, raw.as_deref()).len(),
+                                )
+                                .ok_or_else(|| {
+                                    Error::new(ErrorKind::Limit, "Category size overflow")
+                                })?;
+                        }
+                    }
+                    let mut category_map = vec![None; column.categories.len()];
+                    let mut new_categories = Vec::new();
+                    let mut new_category_ids = HashMap::<String, u32>::new();
+                    for (index, label) in column.categories.iter().enumerate() {
+                        job.check()?;
+                        let count = counts[index];
+                        if count == 0 {
+                            continue;
+                        }
+                        let available = MAX_TYPED_TRANSFORM_TEXT_BYTES
+                            .saturating_sub(text_bytes.saturating_sub(old_bytes[index]));
+                        let max_bytes_per_cell = available / count;
+                        let transformed = transform(label, max_bytes_per_cell)?;
+                        let per_cell_bytes = safe_text_len(&transformed);
+                        let transformed_bytes =
+                            per_cell_bytes.checked_mul(count).ok_or_else(|| {
+                                Error::new(ErrorKind::Limit, "Category size overflow")
+                            })?;
+                        text_bytes = text_bytes
+                            .checked_sub(old_bytes[index])
+                            .and_then(|size| size.checked_add(transformed_bytes))
+                            .filter(|size| *size <= MAX_TYPED_TRANSFORM_TEXT_BYTES)
+                            .ok_or_else(|| {
+                                Error::new(
+                                    ErrorKind::Limit,
+                                    "Transformed table exceeds 32 MiB of cell text",
+                                )
+                            })?;
+                        let id = if let Some(id) = new_category_ids.get(&transformed) {
+                            *id
+                        } else {
+                            let id = u32::try_from(new_categories.len()).map_err(|_| {
+                                Error::new(ErrorKind::Limit, "Too many categorical values")
+                            })?;
+                            new_categories.push(transformed.clone());
+                            new_category_ids.insert(transformed, id);
+                            id
+                        };
+                        category_map[index] = Some(id);
+                    }
+                    let mut values = Vec::with_capacity(self.rows);
+                    let mut raw_text = Vec::with_capacity(self.rows);
+                    for (value, raw) in column.values.iter().zip(&column.raw_text) {
+                        job.check()?;
+                        match value {
+                            Scalar::Null => {
+                                values.push(Scalar::Null);
+                                raw_text.push(raw.clone());
+                            }
+                            Scalar::Categorical(index) => {
+                                let mapped = category_map
+                                    .get(*index as usize)
+                                    .and_then(|value| *value)
+                                    .ok_or_else(|| Error::input("Invalid categorical value"))?;
+                                values.push(Scalar::Categorical(mapped));
+                                raw_text.push(None);
+                            }
+                            _ => {
+                                return Err(Error::input(
+                                    "Typed categorical column contains an incompatible scalar",
+                                ))
+                            }
+                        }
+                    }
+                    (values, raw_text, new_categories)
+                }
+                _ => unreachable!("text column type was validated"),
+            }
+        };
+        let column = &mut self.columns[column_index];
+        column.values = values;
+        column.raw_text = raw_text;
+        column.categories = categories;
+        Ok(())
+    }
+
+    fn serialized_text_bytes(&self, job: &Job) -> Result<usize> {
+        let mut bytes = self
+            .columns
+            .iter()
+            .try_fold(0usize, |total, column| total.checked_add(column.name.len()))
+            .ok_or_else(|| Error::new(ErrorKind::Limit, "Typed text size overflow"))?;
+        for column in &self.columns {
+            for (value, raw_text) in column.values.iter().zip(&column.raw_text) {
+                job.check()?;
+                bytes = bytes
+                    .checked_add(scalar_text(value, &column.categories, raw_text.as_deref()).len())
+                    .filter(|size| *size <= MAX_TYPED_TRANSFORM_TEXT_BYTES)
+                    .ok_or_else(|| {
+                        Error::new(ErrorKind::Limit, "Typed table exceeds 32 MiB of cell text")
+                    })?;
+            }
+        }
+        Ok(bytes)
     }
 
     /// Filter a numeric column by a finite real threshold. Integer columns are
@@ -2783,6 +3054,17 @@ fn safe_text(value: &str) -> String {
     }
 }
 
+fn safe_text_len(value: &str) -> usize {
+    value.len()
+        + if value.trim_start().starts_with(['=', '+', '-', '@'])
+            || value.starts_with(['\t', '\r', '\n'])
+        {
+            1
+        } else {
+            0
+        }
+}
+
 fn arrow_column(column: &Column) -> Result<(DataType, ArrayRef, HashMap<String, String>)> {
     let mut metadata = HashMap::new();
     let (data_type, array): (DataType, ArrayRef) = match column.kind {
@@ -3735,6 +4017,87 @@ mod tests {
         assert_eq!(typed.columns[0].categories[0], "North");
         assert_eq!(typed.columns[0].values, [Scalar::Categorical(0)]);
         assert_eq!(typed.columns[1].values, [Scalar::Int64(1)]);
+    }
+
+    #[test]
+    fn typed_text_transforms_preserve_categories_nulls_metadata_and_other_types() {
+        let source = table(
+            vec!["group", "note", "count"],
+            vec![
+                vec![" alpha ", "  Ada  ", "1"],
+                vec!["alpha", "ada", "2"],
+                vec!["beta", "Straße", "3"],
+                vec!["", "  ", "4"],
+            ],
+        );
+        let request = SchemaRequest {
+            overrides: BTreeMap::from([
+                ("group".into(), ColumnType::Categorical),
+                ("note".into(), ColumnType::String),
+            ]),
+            metadata: BTreeMap::from([(
+                "note".into(),
+                ColumnMetadata {
+                    label: Some("Notes".into()),
+                    unit: None,
+                },
+            )]),
+        };
+        let mut typed = TypedTable::infer(&source, request, &Job::new()).unwrap();
+        typed
+            .normalize_text_column("group", "upper", &Job::new())
+            .unwrap();
+        typed
+            .normalize_text_column("group", "trim", &Job::new())
+            .unwrap();
+        typed
+            .normalize_text_column("note", "upper", &Job::new())
+            .unwrap();
+        typed
+            .replace_literal_text("note", "A", "x", &Job::new())
+            .unwrap();
+
+        let group = &typed.columns[0];
+        assert_eq!(group.kind, ColumnType::Categorical);
+        assert_eq!(group.categories, ["ALPHA", "BETA"]);
+        assert_eq!(
+            group.values,
+            [
+                Scalar::Categorical(0),
+                Scalar::Categorical(0),
+                Scalar::Categorical(1),
+                Scalar::Null
+            ]
+        );
+        let note = &typed.columns[1];
+        assert_eq!(note.kind, ColumnType::String);
+        assert_eq!(note.metadata.label.as_deref(), Some("Notes"));
+        assert_eq!(
+            note.values,
+            [
+                Scalar::String("  xDx  ".into()),
+                Scalar::String("xDx".into()),
+                Scalar::String("STRxSSE".into()),
+                Scalar::Null
+            ]
+        );
+        assert_eq!(typed.columns[2].kind, ColumnType::Int64);
+        assert_eq!(
+            typed.columns[2].values,
+            [
+                Scalar::Int64(1),
+                Scalar::Int64(2),
+                Scalar::Int64(3),
+                Scalar::Int64(4)
+            ]
+        );
+        assert!(!typed.supports_text_transform("count").unwrap());
+        assert!(typed
+            .normalize_text_column("count", "upper", &Job::new())
+            .is_err());
+        assert!(typed
+            .replace_literal_text("note", "", "x", &Job::new())
+            .is_err());
     }
 
     #[test]

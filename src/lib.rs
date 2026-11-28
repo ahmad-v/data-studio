@@ -33,7 +33,7 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"drop-missing",label:"Drop rows with missing values",hint:"Enter a column name. Removes rows where that column is blank after trimming whitespace."},
  Operation{id:"fill-missing",label:"Fill missing values",hint:"Enter column=value. Replaces blank or whitespace-only cells in the selected column."},
  Operation{id:"rename-column",label:"Rename a column",hint:"Enter old=new. The new name must be unique and nonblank. CSV, TSV, XLSX (first worksheet) and supported scalar Parquet inputs preserve inferred types in previews and Parquet output; CSV/TSV output serializes nulls as empty fields."},
- Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Version 1 projects keep their original text behavior unless they include `typed_schema`. Version 2 projects use the typed pipeline with inferred columns by default; optional `typed_schema` provides overrides and metadata. Typed projects support schema-aware filters and numeric expressions, typed constant/index columns, atomic multi-column rename and drop, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving missing-value fills. Typed results are saved to a new .parquet file. Join paths are relative to the project file unless absolute."#},
+ Operation{id:"run-project",label:"Run data project",hint:r#"Enter the project JSON path. Version 1 projects keep their original text behavior unless they include `typed_schema`. Version 2 projects use the typed pipeline with inferred columns by default; optional `typed_schema` provides overrides and metadata. Typed projects support schema-aware filters and numeric expressions, string/categorical `normalize-text` and `replace-literal`, typed constant/index columns, atomic multi-column rename and drop, type-preserving inner joins (`typed-inner-join` with `right_schema`), typed `group-sum`/`group-mean`, and type-preserving missing-value fills. Typed results are saved to a new .parquet file. Join paths are relative to the project file unless absolute."#},
  Operation{id:"counts",label:"Value counts",hint:"Enter a column name to count exact values, including blanks. Preview shows up to 30 groups."},
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. CSV, TSV, first-sheet XLSX and supported scalar Parquet use typed keys/values; reports counts, missing values, mean, sample SD and range."},
@@ -1272,6 +1272,8 @@ fn try_typed_basic_operation(
             | "filter-contains-insensitive"
             | "filter-starts-with"
             | "filter-ends-with"
+            | "normalize-text"
+            | "replace-literal"
             | "deduplicate"
             | "drop-duplicates-by-columns"
             | "sort"
@@ -1384,6 +1386,22 @@ fn try_typed_basic_operation(
             Step::FilterEndsWith { column, value } => {
                 table.filter_text(&column, &value, typed::TextMatch::EndsWith, job)?
             }
+            Step::NormalizeText { column, mode } => {
+                if !table.supports_text_transform(&column)? {
+                    return Ok(None);
+                }
+                table.normalize_text_column(&column, &mode, job)?;
+            }
+            Step::ReplaceLiteral {
+                column,
+                find,
+                replace,
+            } => {
+                if !table.supports_text_transform(&column)? {
+                    return Ok(None);
+                }
+                table.replace_literal_text(&column, &find, &replace, job)?;
+            }
             Step::Deduplicate {} => table.deduplicate_rows(None, job)?,
             Step::DropDuplicatesByColumns { columns } => {
                 table.deduplicate_rows(Some(&columns), job)?
@@ -1458,7 +1476,7 @@ fn try_typed_basic_operation(
     Ok(Some(Outcome {
         preview: preview.chars().take(24000).collect(),
         written,
-        warnings: vec!["Applied the operation to typed columns. CSV/TSV cells are decoded directly; XLSX uses native worksheet cell types from the first sheet, preserving explicit empty text separately from blank cells. Whitespace-only values are null. Delimited output preserves original cell spellings where possible, including leading zeroes and whitespace-only tokens on retained rows. True nulls serialize as empty fields; reimport cannot distinguish an empty string from null. Parquet retains that distinction. Source inputs remain unchanged. Parquet input uses the supported-scalar decoder before type inference, so original dictionary and field metadata are not restored.".into()],
+        warnings: vec!["Applied the operation to typed columns. String and categorical text transforms preserve their type, nulls and metadata; text transforms on non-text columns retain the legacy string behavior. CSV/TSV cells are decoded directly; XLSX uses native worksheet cell types from the first sheet, preserving explicit empty text separately from blank cells. Whitespace-only values are null. Delimited output preserves original cell spellings where possible, including leading zeroes and whitespace-only tokens on retained rows. True nulls serialize as empty fields; reimport cannot distinguish an empty string from null. Parquet retains that distinction. Source inputs remain unchanged. Parquet input uses the supported-scalar decoder before type inference, so original dictionary and field metadata are not restored.".into()],
         ..Outcome::default()
     }))
 }
@@ -1716,7 +1734,7 @@ pub fn handle(r: Request, j: Job) -> Result<Outcome> {
                 preview: preview.chars().take(24000).collect(),
                 written,
                 warnings: vec![format!(
-                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed group-sum/group-mean preserve key type and metadata, group null keys together, omit null values and return null for all-missing groups. Missing-value fills parse replacements against the existing column type and preserve source spellings in previews. Typed pipelines support filter, filter-compare, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, fill-missing, fill-forward, fill-backward, drop-rows-any-missing, head-rows, tail-rows and reverse-rows. Joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
+                    "Applied {steps} typed project steps. Filters and sorts use declared or inferred types; nulls sort last. Numeric expressions create finite float64 columns, propagate nulls, reject non-finite results and require exact conversion of integer inputs. Typed group-sum/group-mean preserve key type and metadata, group null keys together, omit null values and return null for all-missing groups. Missing-value fills parse replacements against the existing column type and preserve source spellings in previews. Typed pipelines support filter, filter-compare, normalize-text, replace-literal, derive-numeric-column, rename-column, typed-inner-join, group-sum, group-mean, sort, select-columns, drop-missing, fill-missing, fill-forward, fill-backward, drop-rows-any-missing, head-rows, tail-rows and reverse-rows. Joins require matching key types and null keys do not match. The original source is unchanged. Parquet output retains Arrow types, nulls, categorical dictionaries, labels and units."
                 )],
                 ..Outcome::default()
             });
@@ -2759,6 +2777,168 @@ mod tests {
         let mut batches = reader.build().unwrap();
         let batch = batches.next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 1);
+    }
+
+    #[test]
+    fn typed_project_text_transforms_preserve_categories_nulls_and_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("typed-text-input.csv");
+        let project_path = dir.path().join("typed-text-project.json");
+        let output = dir.path().join("typed-text-output.parquet");
+        let original = "group,note,count\n alpha ,  Ada  ,1\nalpha,ada,2\nbeta,Straße,3\n,  ,4\n";
+        std::fs::write(&input, original).unwrap();
+        std::fs::write(
+            &project_path,
+            r#"{
+                "schema_version": 2,
+                "typed_schema": {
+                    "overrides": {"group":"categorical", "note":"string"},
+                    "metadata": {"note":{"label":"Notes"}}
+                },
+                "steps": [
+                    {"operation":"normalize-text", "column":"group", "mode":"upper"},
+                    {"operation":"normalize-text", "column":"group", "mode":"trim"},
+                    {"operation":"normalize-text", "column":"note", "mode":"upper"},
+                    {"operation":"replace-literal", "column":"note", "find":"A", "replace":"x"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let outcome = handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: output.clone(),
+                parameter: project_path.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert!(outcome.warnings[0].contains("normalize-text, replace-literal"));
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        let bytes = localwright_core::read_bounded(&output, 16 * 1024 * 1024).unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        assert!(matches!(
+            reader.schema().field(0).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+        assert_eq!(reader.schema().field(1).data_type(), &DataType::Utf8);
+        assert_eq!(
+            reader.schema().field(1).metadata()["localwright.label"],
+            "Notes"
+        );
+        assert_eq!(reader.schema().field(2).data_type(), &DataType::Int64);
+        let mut batches = reader.build().unwrap();
+        let batch = batches.next().unwrap().unwrap();
+        let group = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::DictionaryArray<arrow_array::types::Int32Type>>()
+            .unwrap();
+        let group_labels = group
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(group_labels.value(0), "ALPHA");
+        assert_eq!(group_labels.value(1), "BETA");
+        let notes = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(notes.value(0), "  xDx  ");
+        assert_eq!(notes.value(2), "STRxSSE");
+        assert!(notes.is_null(3));
+        assert!(group.is_null(3));
+
+        let invalid_project = dir.path().join("invalid-text-project.json");
+        let invalid_output = dir.path().join("invalid-text-output.parquet");
+        std::fs::write(
+            &invalid_project,
+            r#"{
+                "schema_version": 2,
+                "steps": [
+                    {"operation":"normalize-text", "column":"count", "mode":"upper"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let error = handle(
+            Request {
+                operation: "run-project".into(),
+                input: input.clone(),
+                output: invalid_output.clone(),
+                parameter: invalid_project.to_string_lossy().into_owned(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("Typed project step 1"));
+        assert!(!invalid_output.exists());
+    }
+
+    #[test]
+    fn standalone_typed_text_transforms_keep_numeric_columns_and_source_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("text-ops.csv");
+        let normalized = dir.path().join("normalized.parquet");
+        let replaced = dir.path().join("replaced.parquet");
+        let original = "note,count\n  Ada  ,1\nStraße,2\n ,3\n";
+        std::fs::write(&input, original).unwrap();
+        handle(
+            Request {
+                operation: "normalize-text".into(),
+                parameter: r#"{"column":"note","mode":"upper"}"#.into(),
+                input: input.clone(),
+                output: normalized.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        handle(
+            Request {
+                operation: "replace-literal".into(),
+                parameter: r#"{"column":"note","find":"A","replace":"x"}"#.into(),
+                input: normalized,
+                output: replaced.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), original);
+        let typed = typed::TypedTable::from_path(
+            &replaced,
+            None,
+            typed::SchemaRequest::default(),
+            &Job::new(),
+        )
+        .unwrap();
+        assert_eq!(typed.schema_report()["columns"][0]["type"], "string");
+        assert_eq!(typed.schema_report()["columns"][1]["type"], "int64");
+        assert_eq!(typed.preview_report()["preview"][0][0], "  xDx  ");
+        assert_eq!(typed.preview_report()["preview"][1][0], "STRxSSE");
+        assert_eq!(typed.preview_report()["preview"][2][0], "");
+
+        let legacy_output = dir.path().join("legacy-numeric-text.csv");
+        let fallback = handle(
+            Request {
+                operation: "normalize-text".into(),
+                parameter: r#"{"column":"count","mode":"trim"}"#.into(),
+                input: input.clone(),
+                output: legacy_output.clone(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        assert!(fallback.warnings[0].contains("Transformation operations still use text cells"));
+        assert_eq!(std::fs::read_to_string(legacy_output).unwrap(), original);
     }
 
     #[test]

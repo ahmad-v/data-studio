@@ -336,6 +336,14 @@ impl Project {
                         Step::FilterEndsWith { column, value } => {
                             table.filter_text(&column, &value, TextMatch::EndsWith, job)
                         }
+                        Step::NormalizeText { column, mode } => {
+                            table.normalize_text_column(&column, &mode, job)
+                        }
+                        Step::ReplaceLiteral {
+                            column,
+                            find,
+                            replace,
+                        } => table.replace_literal_text(&column, &find, &replace, job),
                         Step::FilterNumberGreater { column, value } => table.filter_compare(
                             &column,
                             TypedComparison::Gt,
