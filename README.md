@@ -14,7 +14,7 @@ This independent studio uses Localwright at source level. There is no separate m
 - Exact-match filter over delimited text or supported scalar Parquet converted to text (implemented-unverified).
 - Numeric column n, missing, mean, sample SD, min/max (implemented-unverified).
 - CSV formula guard; Parquet UTF-8 columns (implemented-unverified).
-- Monochrome single-series and palette-aware multi-series scientific line and scatter SVGs with legends, marker/dash differentiation, visible titles and axis labels; existing `x,y` parameters remain supported (focused Linux unit fixtures pass; native matrix pending).
+- Monochrome single-series and palette-aware multi-series scientific line and scatter figures as SVG or vector PDF, with legends, marker/dash differentiation, visible titles and axis labels; existing `x,y` parameters remain supported. PDF exports accept `width_mm` and `height_mm` in JSON and default to 210 × 148 mm. Host font availability affects label outlines; generated plots are not rasterized.
 
 The project is intended to remain free, local and offline, without tracking, advertising, subscriptions or premium features. See [the manifesto](MANIFESTO.md) for the motivation behind it.
 
