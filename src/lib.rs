@@ -37,16 +37,16 @@ pub const OPERATIONS:&[Operation]=&[
  Operation{id:"select-sql",label:"Run a local SQL query",hint:"Enter one SQLite SELECT over the input table. Use explicit numeric casts for imported text."},
  Operation{id:"group-summary",label:"Grouped numeric summary",hint:"Enter group-column,value-column. Computes counts, mean, sample SD and range for each exact group."},
  Operation{id:"summary",label:"Summary",hint:"Parameter: column name. Finite numeric values only; blanks excluded, invalid values rejected."},
- Operation{id:"quantiles",label:"Quantiles and IQR",hint:"Parameter: numeric column. Reports R7 quartiles, median and interquartile range as JSON."},
- Operation{id:"standard-error",label:"Standard error",hint:"Parameter: numeric column. Reports sample SD and standard error of the mean."},
- Operation{id:"mean-ci",label:"Mean confidence interval",hint:"Parameter: numeric column. Reports a two-sided 95% Student-t interval for the mean."},
- Operation{id:"bootstrap-mean-ci",label:"Bootstrap mean interval",hint:"Parameter: numeric column. Deterministic 95% percentile bootstrap; at least 2 and at most 5,000 values."},
- Operation{id:"bootstrap-median-ci",label:"Bootstrap median interval",hint:"Parameter: numeric column. Deterministic 95% percentile bootstrap; at least 2 and at most 5,000 values."},
- Operation{id:"welch-t-test",label:"Welch two-sample test",hint:"Enter group-column,value-column. Requires exactly two nonblank groups with at least two finite values each."},
- Operation{id:"paired-t-test",label:"Paired t test",hint:"Enter first-column,second-column. Blank pairs excluded; tests mean paired difference with a two-sided Student-t interval."},
- Operation{id:"one-way-anova",label:"One-way ANOVA",hint:"Enter group-column,value-column. Blank group/value rows excluded; at least two groups and positive within-group degrees of freedom required."},
- Operation{id:"spearman",label:"Spearman rank correlation",hint:"Enter x-column,y-column. Complete numeric pairs only; average ranks for ties and approximate p value."},
- Operation{id:"correlation-interval",label:"Pearson correlation interval",hint:"Enter x-column,y-column. Reports a two-sided 95% Fisher-z interval for n > 3 and |r| < 1."},
+ Operation{id:"quantiles",label:"Quantiles and IQR",hint:"Parameter: inferred numeric column. CSV, TSV, first-worksheet XLSX and Parquet values use typed columns; nulls are excluded and unsafe integer-to-float conversions are rejected."},
+ Operation{id:"standard-error",label:"Standard error",hint:"Parameter: inferred numeric column. CSV, TSV, first-worksheet XLSX and Parquet use typed columns; nulls are excluded."},
+ Operation{id:"mean-ci",label:"Mean confidence interval",hint:"Parameter: inferred numeric column. Typed CSV, TSV, first-worksheet XLSX and Parquet; reports a two-sided 95% Student-t interval."},
+ Operation{id:"bootstrap-mean-ci",label:"Bootstrap mean interval",hint:"Parameter: inferred numeric column. Typed CSV, TSV, first-worksheet XLSX and Parquet; deterministic 95% percentile bootstrap."},
+ Operation{id:"bootstrap-median-ci",label:"Bootstrap median interval",hint:"Parameter: inferred numeric column. Typed CSV, TSV, first-worksheet XLSX and Parquet; deterministic 95% percentile bootstrap."},
+ Operation{id:"welch-t-test",label:"Welch two-sample test",hint:"Enter group-column,value-column. Typed numeric values; null values and blank/null groups are excluded. Requires two groups with at least two observations each."},
+ Operation{id:"paired-t-test",label:"Paired t test",hint:"Enter first-column,second-column. Typed numeric columns; incomplete pairs are excluded while preserving row alignment."},
+ Operation{id:"one-way-anova",label:"One-way ANOVA",hint:"Enter group-column,value-column. Typed numeric values; null values and blank/null groups are excluded."},
+ Operation{id:"spearman",label:"Spearman rank correlation",hint:"Enter x-column,y-column. Typed numeric columns; complete pairs only, average ranks for ties and approximate p value."},
+ Operation{id:"correlation-interval",label:"Pearson correlation interval",hint:"Enter x-column,y-column. Typed numeric columns; complete pairs only. Reports a two-sided 95% Fisher-z interval."},
  Operation{id:"recode-values",label:"Recode exact values",hint:r#"Parameter JSON: {"column":"status","mapping":{"old":"new"}}. Unlisted values remain unchanged."#},
  Operation{id:"convert-number",label:"Convert to numeric text",hint:r#"Parameter JSON: {"column":"amount"}. Validates finite numbers and normalizes their text; blanks remain blank."#},
  Operation{id:"convert-integer",label:"Convert to integer text",hint:r#"Parameter JSON: {"column":"count"}. Requires exact signed 64-bit whole numbers; blanks remain blank."#},
@@ -1060,6 +1060,38 @@ struct PairMoments {
     sum_xy: f64,
 }
 
+fn pair_moments_from_values(x: &[f64], y: &[f64], job: &Job) -> Result<PairMoments> {
+    if x.len() != y.len() {
+        return Err(Error::input(
+            "Paired statistical inputs have different lengths",
+        ));
+    }
+    let mut n = 0;
+    let (mut mean_x, mut mean_y) = (0.0, 0.0);
+    let (mut sum_xx, mut sum_yy, mut sum_xy) = (0.0, 0.0, 0.0);
+    for (&a, &b) in x.iter().zip(y) {
+        job.check()?;
+        n += 1;
+        let (dx, dy) = (a - mean_x, b - mean_y);
+        mean_x += dx / n as f64;
+        mean_y += dy / n as f64;
+        sum_xx += dx * (a - mean_x);
+        sum_yy += dy * (b - mean_y);
+        sum_xy += dx * (b - mean_y);
+        if !sum_xx.is_finite() || !sum_yy.is_finite() || !sum_xy.is_finite() {
+            return Err(Error::input("Numerical overflow"));
+        }
+    }
+    Ok(PairMoments {
+        n,
+        mean_x,
+        mean_y,
+        sum_xx,
+        sum_yy,
+        sum_xy,
+    })
+}
+
 fn pair_moments(table: &Table, x: usize, y: usize, job: &Job) -> Result<PairMoments> {
     let mut n = 0;
     let (mut mean_x, mut mean_y) = (0.0, 0.0);
@@ -1388,7 +1420,16 @@ fn try_typed_numeric_statistic(
 ) -> Result<Option<Outcome>> {
     if !matches!(
         operation,
-        "quantiles" | "standard-error" | "mean-ci" | "bootstrap-mean-ci" | "bootstrap-median-ci"
+        "quantiles"
+            | "standard-error"
+            | "mean-ci"
+            | "bootstrap-mean-ci"
+            | "bootstrap-median-ci"
+            | "welch-t-test"
+            | "one-way-anova"
+            | "paired-t-test"
+            | "spearman"
+            | "correlation-interval"
     ) {
         return Ok(None);
     }
@@ -1396,7 +1437,10 @@ fn try_typed_numeric_statistic(
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase);
-    if !matches!(input_kind.as_deref(), Some("csv" | "tsv" | "parquet")) {
+    if !matches!(
+        input_kind.as_deref(),
+        Some("csv" | "tsv" | "xlsx" | "parquet")
+    ) {
         return Ok(None);
     }
     if !output.as_os_str().is_empty()
@@ -1408,13 +1452,57 @@ fn try_typed_numeric_statistic(
         return Err(Error::input("Statistical reports require a .json output"));
     }
     let table = typed::TypedTable::from_path(input, None, typed::SchemaRequest::default(), job)?;
-    let values = table.numeric_values(parameter, job)?;
     let report = match operation {
-        "quantiles" => statistics::quantiles(&values),
-        "standard-error" => statistics::standard_error(&values),
-        "mean-ci" => statistics::mean_confidence_interval(&values),
-        "bootstrap-mean-ci" => statistics::bootstrap_mean_interval(&values, job),
-        _ => statistics::bootstrap_median_interval(&values, job),
+        "quantiles"
+        | "standard-error"
+        | "mean-ci"
+        | "bootstrap-mean-ci"
+        | "bootstrap-median-ci" => {
+            let values = table.numeric_values(parameter, job)?;
+            match operation {
+                "quantiles" => statistics::quantiles(&values),
+                "standard-error" => statistics::standard_error(&values),
+                "mean-ci" => statistics::mean_confidence_interval(&values),
+                "bootstrap-mean-ci" => statistics::bootstrap_mean_interval(&values, job),
+                _ => statistics::bootstrap_median_interval(&values, job),
+            }
+        }
+        "welch-t-test" | "one-way-anova" => {
+            let (group, value) = parameter
+                .split_once(',')
+                .ok_or_else(|| Error::input("Expected group-column,value-column"))?;
+            let groups = table.grouped_numeric_values(group, value, job)?;
+            if operation == "welch-t-test" {
+                if groups.len() != 2 {
+                    return Err(Error::input(
+                        "Welch test requires exactly two nonblank groups",
+                    ));
+                }
+                statistics::welch_t_test(&groups[0].values, &groups[1].values)
+            } else {
+                statistics::one_way_anova(&groups)
+            }
+        }
+        "paired-t-test" | "spearman" => {
+            let (left, right) = parameter
+                .split_once(',')
+                .ok_or_else(|| Error::input("Expected x-column,y-column"))?;
+            let (left, right) = table.numeric_pairs(left, right, job)?;
+            if operation == "paired-t-test" {
+                statistics::paired_t_test(&left, &right)
+            } else {
+                statistics::spearman(&left, &right)
+            }
+        }
+        "correlation-interval" => {
+            let (left, right) = parameter
+                .split_once(',')
+                .ok_or_else(|| Error::input("Expected x-column,y-column"))?;
+            let (left, right) = table.numeric_pairs(left, right, job)?;
+            let moments = pair_moments_from_values(&left, &right, job)?;
+            statistics::pearson_interval(moments.pearson_r()?, moments.n)
+        }
+        _ => unreachable!("supported typed statistic"),
     }?;
     let text = serde_json::to_string_pretty(&report)?;
     let written = if output.as_os_str().is_empty() {
@@ -1427,7 +1515,7 @@ fn try_typed_numeric_statistic(
     Ok(Some(Outcome {
         preview: text,
         written,
-        warnings: vec!["Statistics read typed numeric columns directly; null values are excluded. Integer values outside the exact f64 range are rejected to prevent silent precision loss. The source data is unchanged.".into()],
+        warnings: vec!["Statistical inputs are read from inferred typed numeric columns; null values are excluded, and paired tests retain row alignment before excluding incomplete pairs. Integer values outside the exact f64 range are rejected to prevent silent precision loss. The source data is unchanged.".into()],
         ..Outcome::default()
     }))
 }
@@ -2908,6 +2996,57 @@ mod tests {
                 operation: "standard-error".into(),
                 input: lossy,
                 parameter: "score".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn grouped_and_paired_statistics_use_typed_columns_and_aligned_nulls() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("groups.csv");
+        std::fs::write(
+            &input,
+            "group,x,y\nA,1,2\nA,2,4\nB,4,8\nB,5,10\n,9,18\nA,,6\n",
+        )
+        .unwrap();
+
+        let grouped = handle(
+            Request {
+                operation: "welch-t-test".into(),
+                input: input.clone(),
+                parameter: "group,x".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let grouped: serde_json::Value = serde_json::from_str(&grouped.preview).unwrap();
+        assert_eq!(grouped["n_first"], 2);
+        assert_eq!(grouped["n_second"], 2);
+
+        let paired = handle(
+            Request {
+                operation: "paired-t-test".into(),
+                input: input.clone(),
+                parameter: "x,y".into(),
+                ..Request::default()
+            },
+            Job::new(),
+        )
+        .unwrap();
+        let paired: serde_json::Value = serde_json::from_str(&paired.preview).unwrap();
+        assert_eq!(paired["n_pairs"], 5);
+
+        let invalid = directory.path().join("not-numeric.csv");
+        std::fs::write(&invalid, "label\nalpha\nbeta\n").unwrap();
+        assert!(handle(
+            Request {
+                operation: "quantiles".into(),
+                input: invalid,
+                parameter: "label".into(),
                 ..Request::default()
             },
             Job::new(),

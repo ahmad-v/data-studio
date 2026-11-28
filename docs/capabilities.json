@@ -225,93 +225,93 @@
     },
     {
       "operation": "quantiles",
-      "description": "R7 quartiles, median and interquartile range; typed CSV/TSV/Parquet numeric inputs exclude nulls and preserve integer precision",
+      "description": "R7 quartiles, median and IQR using typed CSV/TSV, first-sheet XLSX and supported scalar Parquet inputs; excludes nulls and rejects lossy integer conversion",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linear interpolation reference fixture passed"
+      "fixture_status": "Interpolation reference and typed statistical route fixtures passed locally on Linux x86_64; Check and Integration for this increment pending."
     },
     {
       "operation": "standard-error",
-      "description": "Sample standard deviation and standard error; typed CSV/TSV/Parquet inputs reject integers outside exact f64 conversion range",
+      "description": "Sample standard error from typed numeric CSV/TSV, first-sheet XLSX and supported scalar Parquet columns",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux operation report fixture passed"
+      "fixture_status": "Sample-SD reference, null exclusion and large-integer precision guards passed locally on Linux x86_64; hosted verification pending."
     },
     {
       "operation": "mean-ci",
-      "description": "Two-sided 95 percent Student-t confidence interval; typed CSV/TSV/Parquet numeric inputs exclude nulls",
+      "description": "Two-sided 95 percent Student-t confidence interval from typed numeric CSV/TSV, first-sheet XLSX and supported scalar Parquet inputs",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Student-t critical values and interval matched reference values"
+      "fixture_status": "Student-t reference and typed statistical route fixtures passed locally on Linux x86_64; hosted verification pending."
     },
     {
       "operation": "bootstrap-mean-ci",
-      "description": "Deterministic 2,000-resample percentile bootstrap interval for a mean with typed scalar input support",
+      "description": "Deterministic 2,000-resample percentile bootstrap interval for a mean from typed supported inputs",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Repeated run determinism and bounded interval fixture passed"
+      "fixture_status": "Determinism and typed input fixtures passed locally on Linux x86_64; 5,000-row cap; hosted verification pending."
     },
     {
       "operation": "bootstrap-median-ci",
-      "description": "Deterministic 2,000-resample percentile bootstrap interval for a median with typed scalar input support",
+      "description": "Deterministic 2,000-resample percentile bootstrap interval for a median from typed supported inputs",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Repeated run determinism and bounded interval fixture passed"
+      "fixture_status": "Determinism and typed input fixtures passed locally on Linux x86_64; 5,000-row cap; hosted verification pending."
     },
     {
       "operation": "welch-t-test",
-      "description": "Unequal-variance two-sample Student-t test and difference interval",
+      "description": "Unequal-variance two-sample Student-t test using typed numeric columns; null/blank group labels are excluded",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Two-sided p value, degrees of freedom and statistic matched reference fixture"
+      "fixture_status": "Reference fixture and grouped typed route tests passed locally on Linux x86_64; hosted verification pending."
     },
     {
       "operation": "paired-t-test",
-      "description": "Paired Student-t test on complete numeric differences",
+      "description": "Paired Student-t test using row-aligned typed numeric pairs; incomplete pairs are excluded",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Linux complete-pair and difference-vector fixture passed"
+      "fixture_status": "Difference-vector and aligned-null regression fixture passed locally on Linux x86_64; hosted verification pending."
     },
     {
       "operation": "one-way-anova",
-      "description": "Independent-groups one-way fixed-effects ANOVA",
+      "description": "Independent-groups one-way fixed-effects ANOVA using typed numeric columns",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "F statistic, degrees of freedom and p value matched reference fixture"
+      "fixture_status": "Reference fixture and typed statistical route tests passed locally on Linux x86_64; hosted verification pending."
     },
     {
       "operation": "spearman",
-      "description": "Spearman rank correlation with average ranks and approximate significance",
+      "description": "Spearman rank correlation from typed complete numeric pairs, with average ranks and approximate significance",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Tied-rank and significance approximation fixture passed"
+      "fixture_status": "Tied-rank and typed route fixtures passed locally on Linux x86_64; hosted verification pending."
     },
     {
       "operation": "correlation-interval",
-      "description": "Two-sided 95 percent Fisher-z interval for Pearson correlation",
+      "description": "Two-sided 95 percent Fisher-z interval for Pearson correlation from typed complete numeric pairs",
       "status": "implemented-unverified",
       "targets": [
         "x86_64-unknown-linux-gnu"
       ],
-      "fixture_status": "Interval ordering, containment and boundary rejection fixtures passed"
+      "fixture_status": "Interval reference and typed pair-input fixtures passed locally on Linux x86_64; hosted verification pending."
     },
     {
       "operation": "recode-values",
